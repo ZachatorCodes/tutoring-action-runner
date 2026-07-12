@@ -1050,6 +1050,7 @@
         <button id="ex-drive">DRIVE</button>
         <button id="ex-view">VIEW</button>
         <button id="ex-map">🧭 Map</button>
+        <button id="ex-photo">📸</button>
         <button id="ex-set">⚙</button>
       </div>
       <div
@@ -1160,7 +1161,14 @@
           justify-content: center;
         "
       >
-        <div style="width: min(420px, 86vw)">
+        <div
+          style="
+            width: min(420px, 86vw);
+            max-height: 90vh;
+            display: flex;
+            flex-direction: column;
+          "
+        >
           <div
             style="
               color: #fff;
@@ -1169,11 +1177,22 @@
               letter-spacing: 0.04em;
               margin-bottom: 12px;
               text-align: center;
+              flex: 0 0 auto;
             "
           >
             TRAVEL TO…
           </div>
-          <div id="ex-travel-list"></div>
+          <div
+            id="ex-travel-list"
+            style="
+              overflow-y: auto;
+              -webkit-overflow-scrolling: touch;
+              overscroll-behavior: contain;
+              flex: 1 1 auto;
+              min-height: 0;
+              padding-right: 4px;
+            "
+          ></div>
           <button
             id="ex-travel-close"
             class="travel-item"
@@ -1181,6 +1200,7 @@
               text-align: center;
               background: rgba(60, 30, 40, 0.9);
               margin-top: 12px;
+              flex: 0 0 auto;
             "
           >
             Close
@@ -1408,7 +1428,10 @@
         0.1,
         600,
       );
-      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      const renderer = new THREE.WebGLRenderer({
+        antialias: true,
+        preserveDrawingBuffer: true,
+      });
       renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
       renderer.setSize(innerWidth, innerHeight);
       renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -3176,6 +3199,20 @@
       addEventListener("keydown", (e) => {
         keys[e.code] = true;
         if (e.code === "Space") e.preventDefault();
+        if (mgActive) {
+          if (e.code === "Space" || e.code === "Enter") {
+            e.preventDefault();
+            mgStop();
+          }
+          return;
+        }
+        if (uiPaused) {
+          if (e.code === "Escape") {
+            closeShopMenu();
+            closeMinigame();
+          }
+          return;
+        }
         if (interiorActive) {
           if (e.code === "KeyE" || e.code === "Enter") doInteriorInteract();
           if (e.code === "Space") {
@@ -3205,13 +3242,17 @@
           if (e.code === "KeyG") {
             if (flying) landPlane();
             else if (boating) dockFerry();
+            else if (subRiding) hopOffSubway();
             else toggleDrive();
           }
           if (e.code === "KeyC") toggleView();
           if (e.code === "KeyB") cycleCarSpeed();
-          if (!driving && !flying && !boating) {
+          if (e.code === "KeyP") takePhoto();
+          if (!driving && !flying && !boating && !subRiding) {
             if (e.code === "KeyE" || e.code === "Enter") tryInteract();
             if (e.code === "Space") exJump();
+          } else if (subRiding && (e.code === "KeyE" || e.code === "Enter")) {
+            hopOffSubway();
           }
         }
       });
@@ -4007,11 +4048,15 @@
         tap(document.getElementById("ex-drive"), () => {
           if (flying) landPlane();
           else if (boating) dockFerry();
+          else if (subRiding) hopOffSubway();
           else toggleDrive();
         });
         tap(document.getElementById("ex-map"), () => {
           miniOn = !miniOn;
           sfx("click");
+        });
+        tap(document.getElementById("ex-photo"), () => {
+          takePhoto();
         });
         tap(document.getElementById("ex-set"), () => {
           openSettings();
@@ -4828,6 +4873,9 @@
         if (Math.abs(x - CPARK.x) < 78 && Math.abs(z - CPARK.z) < 98)
           return true; // Central Park
         if (Math.abs(x - TSQ.x) < 17 && Math.abs(z - TSQ.z) < 17) return true; // Times Square
+        if (Math.abs(x - 34) < 9 && Math.abs(z + 24) < 9) return true; // coffee shop
+        if (Math.abs(x + 34) < 9 && Math.abs(z + 24) < 9) return true; // arcade
+        if (Math.abs(x - 36) < 9 && Math.abs(z - 26) < 9) return true; // toy store
         return false;
       }
       function exBlockGroup(gx, gz) {
@@ -5270,6 +5318,8 @@
         interiorActive = false;
         boating = false;
         boat = null;
+        subRiding = false;
+        subCar = null;
         buildFamilies();
         // warm hemisphere fill light for softer, richer shading
         if (exHemi) {
@@ -5451,6 +5501,9 @@
         buildRain();
         buildCentralPark();
         buildTimesSquare();
+        buildStreetLife();
+        buildSubway();
+        buildCityShops();
         spawnPeople(14);
         updateExHud();
         // ---- sunlight with soft shadows (follows the player) ----
@@ -5659,6 +5712,7 @@
 
       function updateExplore(dt) {
         if (!exReady) return;
+        if (uiPaused) return;
         // traffic
         for (const c of exCars2) {
           c.pos += c.dir * c.speed * dt;
@@ -5669,6 +5723,7 @@
         }
         for (const r of exRides) r.update(dt);
         updatePeople(dt);
+        updateStreetLife(dt);
         updateSky(dt);
         for (const c of exCoins) {
           if (!c.got) {
@@ -5695,6 +5750,10 @@
         }
         if (boating) {
           updateBoat(dt);
+          return;
+        }
+        if (subRiding) {
+          updateSubway(dt);
           return;
         }
         if (travelOpen) return; // travel menu open: freeze player
@@ -6088,7 +6147,8 @@
           riding ||
           flying ||
           interiorActive ||
-          boating
+          boating ||
+          subRiding
         )
           return;
         if (driving) {
@@ -6194,6 +6254,18 @@
           yaw: Math.PI,
         },
         { n: "American Dream Mall", x: MALL.x, z: MALL.z - 26, yaw: Math.PI },
+        {
+          n: "Central Park \ud83c\udf33",
+          x: CPARK.x,
+          z: CPARK.z - 40,
+          yaw: Math.PI,
+        },
+        {
+          n: "Times Square \ud83c\udfc6",
+          x: TSQ.x,
+          z: TSQ.z + 10,
+          yaw: Math.PI,
+        },
       ];
       function openTravel() {
         if (state !== "explore") return;
@@ -6457,6 +6529,7 @@
         });
       }
       function updateInterior(dt) {
+        if (uiPaused) return;
         let ix = 0,
           iz = 0;
         if (keys["KeyW"] || keys["ArrowUp"]) iz -= 1;
@@ -7967,8 +8040,615 @@
       }
 
       // ============================================================
-      //  BACKBONE SYSTEMS: economy · audio · day-night · weather · minimap · settings
+      //  WAVE 2A: photo mode · street life · subway
       // ============================================================
+      function takePhoto() {
+        try {
+          renderer.render(scene, camera);
+          const url = renderer.domElement.toDataURL("image/png");
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = "voidrunner-" + Date.now() + ".png";
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          const f = document.getElementById("photoflash");
+          if (f) {
+            f.style.transition = "none";
+            f.style.opacity = "0.85";
+            requestAnimationFrame(() => {
+              f.style.transition = "opacity .5s";
+              f.style.opacity = "0";
+            });
+          }
+          sfx("click");
+          showToast("\ud83d\udcf8 Photo saved!", "#fff");
+        } catch (e) {
+          showToast("Photo couldn\u2019t save here", "#ffb0b0");
+        }
+      }
+
+      let dogs = [],
+        pigeons = [];
+      function makeCritter(col, kind) {
+        const g = new THREE.Group();
+        const body = new THREE.Mesh(boxGeo, fmat(col));
+        if (kind === "dog") {
+          body.scale.set(0.9, 0.5, 0.4);
+          body.position.y = 0.5;
+          g.add(body);
+          const head = new THREE.Mesh(boxGeo, fmat(col));
+          head.scale.set(0.42, 0.42, 0.36);
+          head.position.set(0.5, 0.72, 0);
+          g.add(head);
+          const tail = new THREE.Mesh(boxGeo, fmat(col));
+          tail.scale.set(0.4, 0.12, 0.12);
+          tail.position.set(-0.5, 0.6, 0);
+          g.add(tail);
+        } else {
+          body.scale.set(0.32, 0.28, 0.22);
+          body.position.y = 0.22;
+          g.add(body);
+          const head = new THREE.Mesh(boxGeo, fmat(0x6a7078));
+          head.scale.set(0.18, 0.18, 0.16);
+          head.position.set(0.16, 0.4, 0);
+          g.add(head);
+        }
+        g.position.set(player.x + rand(-30, 30), 0, player.z + rand(-30, 30));
+        exploreWorld.add(g);
+        return {
+          g,
+          kind,
+          hd: rand(0, 6.28),
+          t: rand(0, 6.28),
+          speed: kind === "dog" ? rand(1.4, 2.8) : rand(0.4, 1.0),
+          fly: 0,
+        };
+      }
+      function buildStreetLife() {
+        dogs.length = 0;
+        pigeons.length = 0;
+        const cartSpots = [
+          [22, -8],
+          [-30, 40],
+          [42, 58],
+          [TSQ.x + 9, TSQ.z + 6],
+          [CPARK.x - 40, CPARK.z - 70],
+        ];
+        for (const s of cartSpots) {
+          exAdd(3, 1.4, 1.8, fmat(0xead0a0), s[0], 0.7, s[1]);
+          exAdd(3.3, 0.3, 2, fmat(0xff5a3a), s[0], 1.55, s[1]);
+          exAdd(0.12, 2, 0.12, nycMetal, s[0], 2.4, s[1]);
+          exAdd(2.6, 0.16, 1.9, fmat(0xffd24a), s[0], 3.4, s[1]);
+          exAdd(
+            2,
+            0.5,
+            0.2,
+            signMat("HOT DOGS", "#7a2a12"),
+            s[0],
+            1.1,
+            s[1] - 1,
+          );
+          const v = mkExPerson(s[0], s[1] + 1.5);
+          v.g.rotation.y = Math.PI;
+          exInteractables.push({
+            x: s[0],
+            z: s[1] + 1.4,
+            r: 2.6,
+            label: "buy a hot dog (5 \u25c9)",
+            action: () => {
+              if (spendCoins(5)) {
+                sfx("buy");
+                showHeld && showHeld(0xffb060);
+                showToast("Hot dog! \ud83c\udf2d", "#ffd27a");
+              }
+            },
+          });
+        }
+        const buskSpots = [
+          [-14, -2],
+          [TSQ.x - 7, TSQ.z - 2],
+          [CPARK.x + 10, CPARK.z + 10],
+        ];
+        for (const s of buskSpots) {
+          mkExPerson(s[0], s[1]);
+          exAdd(0.5, 1.1, 0.16, fmat(0x8a4a2a), s[0] + 0.45, 1.15, s[1]);
+          exAdd(0.9, 0.2, 0.9, fmat(0x2a2a33), s[0] + 0.1, 0.11, s[1] + 0.6); // open guitar case
+          exInteractables.push({
+            x: s[0],
+            z: s[1],
+            r: 2.4,
+            label: "tip the busker (2 \u25c9)",
+            action: () => {
+              if (spendCoins(2)) {
+                sfx("coin");
+                showToast("\ud83c\udfb8 \u266a Nice tune!", "#ffe6a0");
+              }
+            },
+          });
+        }
+        for (let i = 0; i < 6; i++)
+          dogs.push(makeCritter([0x8a6a3a, 0x3a3a44, 0xd8c8a8][i % 3], "dog"));
+        for (let i = 0; i < 16; i++)
+          pigeons.push(makeCritter(0x9aa0a8, "pigeon"));
+      }
+      function updateStreetLife(dt) {
+        for (const d of dogs) {
+          d.t += dt;
+          d.g.position.x += Math.cos(d.hd) * d.speed * dt;
+          d.g.position.z += Math.sin(d.hd) * d.speed * dt;
+          d.g.rotation.y = -d.hd + Math.PI / 2;
+          if (Math.random() < 0.012) d.hd += rand(-1.2, 1.2);
+          if (
+            Math.abs(d.g.position.x - player.x) > 60 ||
+            Math.abs(d.g.position.z - player.z) > 60
+          )
+            d.g.position.set(
+              player.x + rand(-40, 40),
+              0,
+              player.z + rand(-40, 40),
+            );
+          d.g.position.y = Math.abs(Math.sin(d.t * 9)) * 0.07;
+        }
+        for (const p of pigeons) {
+          p.t += dt;
+          if (p.fly > 0) {
+            p.fly -= dt;
+            p.g.position.y = Math.min(p.g.position.y + dt * 7, 7);
+            p.g.position.x += Math.cos(p.hd) * 5 * dt;
+            p.g.position.z += Math.sin(p.hd) * 5 * dt;
+            p.g.rotation.y = -p.hd + Math.PI / 2;
+          } else {
+            p.g.position.y = Math.max(0, p.g.position.y - dt * 9);
+            if (Math.random() < 0.006) p.fly = rand(1, 2.4);
+            else {
+              p.g.position.x += Math.cos(p.hd) * 0.5 * dt;
+              p.g.position.z += Math.sin(p.hd) * 0.5 * dt;
+              if (Math.random() < 0.03) p.hd += rand(-1.6, 1.6);
+            }
+          }
+          if (
+            Math.abs(p.g.position.x - player.x) > 72 ||
+            Math.abs(p.g.position.z - player.z) > 72
+          )
+            p.g.position.set(
+              player.x + rand(-45, 45),
+              0,
+              player.z + rand(-45, 45),
+            );
+        }
+      }
+
+      // ---------- subway (board → auto-ride → hop off) ----------
+      let subCar = null,
+        subCurve = null,
+        subRiding = false,
+        subT = 0,
+        subStations = [],
+        subPauseT = 0,
+        subNear = -1;
+      function buildSubway() {
+        subStations = [
+          { n: "Spawn", x: 0, z: 26 },
+          { n: "Times Square", x: TSQ.x, z: TSQ.z + 13 },
+          { n: "Empire State", x: ES.x + 22, z: ES.z },
+          { n: "Central Park", x: CPARK.x - 64, z: CPARK.z },
+          { n: "Ferry", x: FERRY.x + 16, z: FERRY.z },
+        ];
+        const pts = subStations.map((s) => V(s.x, 1.2, s.z));
+        subCurve = new THREE.CatmullRomCurve3(pts, true, "catmullrom", 0.3);
+        const tube = new THREE.Mesh(
+          new THREE.TubeGeometry(subCurve, 320, 0.32, 5, true),
+          new THREE.MeshStandardMaterial({
+            color: 0x565b68,
+            metalness: 0.6,
+            roughness: 0.4,
+          }),
+        );
+        tube.matrixAutoUpdate = false;
+        tube.updateMatrix();
+        exploreWorld.add(tube);
+        subStations.forEach((s, i) => {
+          exAdd(11, 0.9, 7, fmat(0x3a3f4a), s.x, 0.45, s.z);
+          exAdd(12, 0.2, 8, fmat(0x22252c), s.x, 0.06, s.z);
+          exAdd(
+            9,
+            3,
+            0.3,
+            signMat("\ud83d\ude87 " + s.n, "#bfe3ff"),
+            s.x,
+            2.5,
+            s.z - 3.4,
+          );
+          exInteractables.push({
+            x: s.x,
+            z: s.z,
+            r: 4.2,
+            label: "board the subway \ud83d\ude87",
+            action: () => boardSubway(i),
+          });
+        });
+        subCar = new THREE.Group();
+        const b = new THREE.Mesh(
+          boxGeo,
+          new THREE.MeshStandardMaterial({
+            color: 0x9a2a3a,
+            metalness: 0.4,
+            roughness: 0.4,
+          }),
+        );
+        b.scale.set(3.2, 2.8, 9);
+        b.position.y = 2.4;
+        subCar.add(b);
+        const stripe = new THREE.Mesh(boxGeo, fmat(0xffd24a));
+        stripe.scale.set(3.3, 0.5, 9.1);
+        stripe.position.y = 2.9;
+        subCar.add(stripe);
+        for (let z = -3; z <= 3; z += 1.6) {
+          for (const sx of [-1.62, 1.62]) {
+            const w = new THREE.Mesh(
+              boxGeo,
+              new THREE.MeshBasicMaterial({ color: 0x9fe0ff }),
+            );
+            w.scale.set(0.1, 0.9, 1.0);
+            w.position.set(sx, 2.6, z);
+            subCar.add(w);
+          }
+        }
+        subCar.visible = false;
+        exploreWorld.add(subCar);
+      }
+      function boardSubway(i) {
+        if (subRiding || driving || flying || boating) return;
+        subRiding = true;
+        subT = (i + 0.02) / subStations.length;
+        subPauseT = 0;
+        subCar.visible = true;
+        showToast(
+          "\ud83d\ude87 Riding \u2014 press E or G to hop off",
+          "#bfe3ff",
+        );
+        updateExHud();
+      }
+      function hopOffSubway() {
+        if (!subRiding) return;
+        subRiding = false;
+        subCar.visible = false;
+        let best = 0,
+          bd = 1e9;
+        for (let i = 0; i < subStations.length; i++) {
+          const s = subStations[i];
+          const d = Math.hypot(
+            subCar.position.x - s.x,
+            subCar.position.z - s.z,
+          );
+          if (d < bd) {
+            bd = d;
+            best = i;
+          }
+        }
+        const s = subStations[best];
+        player.x = s.x;
+        player.z = s.z + 5;
+        player.y = 0;
+        exVY = 0;
+        exOnGround = true;
+        player.yaw = Math.PI;
+        sfx("land");
+        showToast("Hopped off at " + s.n, "#bfe3ff");
+        updateExHud();
+      }
+      function updateSubway(dt) {
+        const n = subStations.length;
+        if (subPauseT > 0) {
+          subPauseT -= dt;
+        } else {
+          subT = (subT + dt * 0.028) % 1;
+          for (let i = 0; i < n; i++) {
+            const sp = i / n;
+            const d = Math.abs(((subT - sp + 1.5) % 1) - 0.5);
+            if (d < 0.01) {
+              subPauseT = 1.5;
+              subNear = i;
+              sfx("click");
+              showToast(
+                "\ud83d\ude87 " + subStations[i].n + " \u2014 E to hop off",
+                "#bfe3ff",
+              );
+              break;
+            }
+          }
+        }
+        const p = subCurve.getPointAt(subT),
+          tan = subCurve.getTangentAt(subT);
+        subCar.position.copy(p);
+        subCar.lookAt(p.x + tan.x, p.y + tan.y, p.z + tan.z);
+        player.x = p.x;
+        player.z = p.z;
+        camera.position.set(p.x - tan.x * 9, p.y + 5.5, p.z - tan.z * 9);
+        camera.lookAt(p.x + tan.x * 8, p.y + 2, p.z + tan.z * 8);
+      }
+
+      // ============================================================
+      //  WAVE 2B: shops (coffee · arcade · toy) with buy menu + mini-game
+      // ============================================================
+      const SHOPO = {
+        coffee: { x: 6600, z: 6000 },
+        arcade: { x: 6600, z: 6300 },
+        toy: { x: 6600, z: 6600 },
+      };
+      function buildShopInterior(cfg) {
+        const X = cfg.o.x,
+          Z = cfg.o.z,
+          W = 17,
+          D = 15,
+          wc = fmat(cfg.wall || 0xe8e0d0),
+          H = 6;
+        iFloor(X, Z, W, D, 0, fmat(cfg.floor || 0xb0a48a));
+        iAdd(W, 0.2, D, fmat(0x2a241c), X, H, Z);
+        iWall(X - W / 2, Z, 0.3, D, H, wc);
+        iWall(X + W / 2, Z, 0.3, D, H, wc);
+        iWall(X, Z + D / 2, W, 0.3, H, wc);
+        const door = 3,
+          seg = (W - door) / 2;
+        iWall(X - (W / 2 - seg / 2), Z - D / 2, seg, 0.3, H, wc);
+        iWall(X + (W / 2 - seg / 2), Z - D / 2, seg, 0.3, H, wc);
+        iSign(X, Z - D / 2 + 0.4, cfg.name, cfg.col, 4.6, W - 2);
+        iAdd(9, 1.1, 1.4, fmat(0x5a4a3a), X, 0.55, Z + 3.4); // counter
+        if (cfg.decor) cfg.decor(X, Z);
+        iPerson(X, Z + 4.6, Math.PI);
+        interiorPortals.push({
+          x: X - 3.2,
+          z: Z + 2,
+          r: 2,
+          label: cfg.buyLabel,
+          action: () => openShopMenu(cfg.name, cfg.items),
+        });
+        interiorPortals.push({
+          x: X + 3.2,
+          z: Z + 2,
+          r: 2,
+          label: cfg.gameLabel,
+          action: () => openMinigame(cfg.name, cfg.reward || 10),
+        });
+        interiorPortals.push({
+          x: X,
+          z: Z - D / 2 - 0.6,
+          r: 2.4,
+          label: (interiorReturn && interiorReturn.exitLabel) || "exit",
+          action: () => exitInterior(),
+        });
+        return { x: X, z: Z - D / 2 + 2, y: 0, yaw: Math.PI };
+      }
+      const COFFEE_CFG = {
+        o: SHOPO.coffee,
+        name: "THE DAILY GRIND",
+        col: "#d8b088",
+        wall: 0x6a4a3a,
+        floor: 0x8a6a4a,
+        buyLabel: "order a drink \u2615",
+        gameLabel: "play: perfect pour!",
+        reward: 8,
+        items: [
+          { n: "Espresso", cost: 4 },
+          { n: "Latte", cost: 6 },
+          { n: "Cookie", cost: 3 },
+          { n: "Muffin", cost: 5 },
+        ],
+        decor: (X, Z) => {
+          iAdd(2, 1.4, 1, nycMetal, X + 2.6, 1.3, Z + 3.6);
+          iAdd(1.4, 0.8, 0.8, fmat(0x3a2a22), X - 3, 1.1, Z + 3.6);
+          iSign(X - 4.4, Z - 3, "\u2615", "#ffe6a0", 3, 2);
+        },
+      };
+      const ARCADE_CFG = {
+        o: SHOPO.arcade,
+        name: "PIXEL PALACE ARCADE",
+        col: "#8affea",
+        wall: 0x241a3a,
+        floor: 0x1a1430,
+        buyLabel: "buy tokens \ud83e\ude99",
+        gameLabel: "play: reaction game!",
+        reward: 15,
+        items: [
+          { n: "10 Tokens", cost: 8 },
+          { n: "50 Tokens", cost: 30 },
+          { n: "Plush Prize", cost: 20 },
+        ],
+        decor: (X, Z) => {
+          for (let i = -2; i <= 2; i++) {
+            iAdd(
+              1.4,
+              3,
+              1.2,
+              fmat(i % 2 ? 0xff2a6a : 0x2a6aff),
+              X + i * 2.6,
+              1.5,
+              Z - 5.2,
+            );
+            iAdd(
+              1.2,
+              1.4,
+              0.2,
+              new THREE.MeshBasicMaterial({ color: 0x9fe0ff }),
+              X + i * 2.6,
+              2.6,
+              Z - 5.0,
+            );
+          }
+        },
+      };
+      const TOY_CFG = {
+        o: SHOPO.toy,
+        name: "TOY GALAXY",
+        col: "#ffb0d8",
+        wall: 0xf0e0e8,
+        floor: 0xe0d0d8,
+        buyLabel: "buy a toy \ud83e\uddf8",
+        gameLabel: "play: claw grab!",
+        reward: 10,
+        items: [
+          { n: "Toy Car", cost: 10 },
+          { n: "Teddy Bear", cost: 12 },
+          { n: "Kite", cost: 7 },
+          { n: "Robot", cost: 15 },
+        ],
+        decor: (X, Z) => {
+          for (let i = -2; i <= 2; i++)
+            for (let j = 0; j < 3; j++) {
+              iAdd(
+                1.2,
+                0.9,
+                0.8,
+                fmat([0xff6a6a, 0x6aa0ff, 0xffd24a, 0x8ae06a][(i + j) % 4]),
+                X + i * 2.6,
+                0.6 + j * 1.4,
+                Z - 5.2,
+              );
+            }
+          iAdd(9, 0.2, 1, fmat(0xcfc0c8), X, 4.4, Z - 5);
+        },
+      };
+      function enterShop(cfg) {
+        enterInterior(() => buildShopInterior(cfg), {
+          mode: "explore",
+          x: cfg.sx,
+          z: cfg.sz - 8,
+          yaw: Math.PI,
+          exitLabel: "exit to street",
+        });
+      }
+      function buildCityShops() {
+        const shops = [
+          [COFFEE_CFG, 34, -24],
+          [ARCADE_CFG, -34, -24],
+          [TOY_CFG, 36, 26],
+        ];
+        for (const s of shops) {
+          const cfg = s[0],
+            x = s[1],
+            z = s[2];
+          cfg.sx = x;
+          cfg.sz = z;
+          wallBox(x, z, 13, 11, 7, pickWinMat(13, 7));
+          exAdd(12, 2, 0.3, signMat(cfg.name, cfg.col), x, 4.7, z - 5.6);
+          exAdd(3.4, 4, 0.3, fmat(0x2a1a12), x, 2, z - 5.55); // door
+          exInteractables.push({
+            x: x,
+            z: z - 6.4,
+            r: 3.2,
+            label: "enter " + cfg.name,
+            action: () => enterShop(cfg),
+          });
+          for (let i = 0; i < 2; i++)
+            exPeople.push(mkExPerson(x + rand(-6, 6), z - 8 + rand(-2, 2)));
+        }
+      }
+
+      let uiPaused = false,
+        mgRAF = null,
+        mgPos = 0,
+        mgDir = 1,
+        mgActive = false,
+        mgReward = 10;
+      function openShopMenu(title, items) {
+        uiPaused = true;
+        if (!touchMode && document.exitPointerLock)
+          try {
+            document.exitPointerLock();
+          } catch (e) {}
+        const p = document.getElementById("shopmenu");
+        if (!p) return;
+        const tt = document.getElementById("sm-title");
+        if (tt) tt.textContent = title;
+        const body = document.getElementById("sm-body");
+        if (body) {
+          body.innerHTML = items
+            .map(
+              (it, i) =>
+                '<button class="smitem" data-i="' +
+                i +
+                '" style="display:block;width:100%;margin:6px 0;padding:11px 12px;border-radius:10px;border:1px solid #4a5a80;background:#1a2033;color:#fff;font-size:15px;text-align:left;cursor:pointer">' +
+                it.n +
+                '<span style="float:right;color:#ffd23a">' +
+                it.cost +
+                " \u25c9</span></button>",
+            )
+            .join("");
+          body.querySelectorAll(".smitem").forEach((b) => {
+            b.onclick = () => {
+              const it = items[+b.dataset.i];
+              if (spendCoins(it.cost)) {
+                sfx("buy");
+                showToast("Bought " + it.n + "! \ud83c\udf89", "#aef0b0");
+              }
+            };
+          });
+        }
+        p.style.display = "flex";
+      }
+      function closeShopMenu() {
+        const p = document.getElementById("shopmenu");
+        if (p) p.style.display = "none";
+        uiPaused = false;
+        if (!touchMode && typeof requestLock === "function") requestLock();
+      }
+      function openMinigame(title, reward) {
+        uiPaused = true;
+        mgReward = reward || 10;
+        mgActive = true;
+        mgPos = 0;
+        mgDir = 1;
+        if (!touchMode && document.exitPointerLock)
+          try {
+            document.exitPointerLock();
+          } catch (e) {}
+        const p = document.getElementById("minigame");
+        if (!p) return;
+        const tt = document.getElementById("mg-title");
+        if (tt) tt.textContent = title + " \u2014 STOP in the green!";
+        p.style.display = "flex";
+        const step = () => {
+          if (!mgActive) return;
+          mgPos += mgDir * 0.017;
+          if (mgPos >= 1) {
+            mgPos = 1;
+            mgDir = -1;
+          }
+          if (mgPos <= 0) {
+            mgPos = 0;
+            mgDir = 1;
+          }
+          const mk = document.getElementById("mg-marker");
+          if (mk) mk.style.left = mgPos * 100 + "%";
+          mgRAF = requestAnimationFrame(step);
+        };
+        step();
+      }
+      function mgStop() {
+        if (!mgActive) return;
+        mgActive = false;
+        if (mgRAF) cancelAnimationFrame(mgRAF);
+        const win = mgPos > 0.4 && mgPos < 0.6;
+        if (win) {
+          addCoins(mgReward);
+          sfx("star");
+          showToast("\ud83c\udfaf Perfect! +" + mgReward + " coins", "#aef0b0");
+        } else {
+          sfx("fail");
+          showToast("Missed \u2014 try again!", "#ffd0b0");
+        }
+        setTimeout(closeMinigame, 750);
+      }
+      function closeMinigame() {
+        mgActive = false;
+        if (mgRAF) cancelAnimationFrame(mgRAF);
+        const p = document.getElementById("minigame");
+        if (p) p.style.display = "none";
+        uiPaused = false;
+        if (!touchMode && typeof requestLock === "function") requestLock();
+      }
+
       let exDrawMul = 1;
       const LANDMARKS = [
         {
@@ -8600,6 +9280,8 @@
         plane = null;
         boating = false;
         boat = null;
+        subRiding = false;
+        subCar = null;
         closeTravel();
         updateExHud();
         if (exHand) exHand.visible = false;
@@ -8639,6 +9321,30 @@
           '<div id="setpanel" style="position:fixed;inset:0;z-index:120;display:none;align-items:center;justify-content:center;background:rgba(4,6,14,0.72)"><div style="background:#141a2c;border:1px solid #3a4a70;border-radius:16px;padding:20px 22px;width:min(420px,86vw);color:#eef;font:14px system-ui"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><b style="font-size:18px">Settings</b><button id="setclose" style="background:#2a3350;border:none;color:#fff;border-radius:8px;padding:6px 12px;cursor:pointer">Close</button></div><div id="setbody"></div></div></div>',
         );
         document.body.appendChild(pan);
+        // photo flash overlay
+        const flash = mk(
+          '<div id="photoflash" style="position:fixed;inset:0;z-index:110;background:#fff;opacity:0;pointer-events:none"></div>',
+        );
+        document.body.appendChild(flash);
+        // shop buy menu
+        const shopm = mk(
+          '<div id="shopmenu" style="position:fixed;inset:0;z-index:120;display:none;align-items:center;justify-content:center;background:rgba(4,6,14,0.72)"><div style="background:#141a2c;border:1px solid #3a4a70;border-radius:16px;padding:20px 22px;width:min(380px,86vw);color:#eef;font:14px system-ui"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><b id="sm-title" style="font-size:18px">Shop</b><button id="sm-close" style="background:#2a3350;border:none;color:#fff;border-radius:8px;padding:6px 12px;cursor:pointer">Done</button></div><div id="sm-body"></div></div></div>',
+        );
+        document.body.appendChild(shopm);
+        document.getElementById("sm-close").onclick = () => {
+          closeShopMenu();
+          sfx("click");
+        };
+        // mini-game
+        const mg = mk(
+          '<div id="minigame" style="position:fixed;inset:0;z-index:120;display:none;align-items:center;justify-content:center;background:rgba(4,6,14,0.78)"><div style="background:#141a2c;border:1px solid #3a4a70;border-radius:16px;padding:22px;width:min(420px,88vw);color:#eef;font:14px system-ui;text-align:center"><b id="mg-title" style="font-size:17px">Mini-game</b><div style="position:relative;height:26px;margin:20px 0;border-radius:13px;background:#1a2033;overflow:hidden"><div style="position:absolute;left:40%;width:20%;top:0;bottom:0;background:rgba(90,230,120,0.4);border-left:2px solid #6ae078;border-right:2px solid #6ae078"></div><div id="mg-marker" style="position:absolute;left:0;top:0;bottom:0;width:4px;background:#fff;box-shadow:0 0 8px #fff"></div></div><button id="mg-stop" style="background:#3a5aaa;border:none;color:#fff;border-radius:10px;padding:12px 26px;font-size:17px;font-weight:700;cursor:pointer">STOP</button><button id="mg-close" style="display:block;margin:12px auto 0;background:#2a3350;border:none;color:#fff;border-radius:8px;padding:6px 12px;cursor:pointer">Leave</button></div></div>',
+        );
+        document.body.appendChild(mg);
+        document.getElementById("mg-stop").onclick = () => mgStop();
+        document.getElementById("mg-close").onclick = () => {
+          closeMinigame();
+          sfx("click");
+        };
         document.getElementById("setclose").onclick = () => {
           closeSettings();
           sfx("click");
