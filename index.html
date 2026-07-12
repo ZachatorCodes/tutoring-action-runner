@@ -6,7 +6,7 @@
       name="viewport"
       content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no, viewport-fit=cover"
     />
-    <title>VOIDRUNNER — endless parkour</title>
+    <title>Action Runner — endless parkour</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -99,15 +99,16 @@
         letter-spacing: 0.02em;
         font-size: clamp(40px, 13vmin, 128px);
         background: linear-gradient(
-          170deg,
-          #fff 0%,
-          var(--cyan) 45%,
-          var(--magenta) 100%
+          100deg,
+          #ff2b2b 0%,
+          #ff4d5a 24%,
+          #8a4bd0 56%,
+          #2f6bff 100%
         );
         -webkit-background-clip: text;
         background-clip: text;
         color: transparent;
-        filter: drop-shadow(0 8px 40px rgba(255, 79, 216, 0.35));
+        filter: drop-shadow(0 8px 40px rgba(80, 120, 255, 0.38));
       }
       .tagline {
         color: var(--dim);
@@ -810,7 +811,7 @@
     <!-- MENU -->
     <div class="overlay" id="menu">
       <div class="eyebrow">First-person · endless · permadeath</div>
-      <div class="title">VOIDRUNNER</div>
+      <div class="title">ACTION RUNNER</div>
       <div class="tagline">
         Sprint the shattered skyway. Every gap is a guess, every fall is final.
         Bank your shards, upgrade, and run again — farther.
@@ -1212,7 +1213,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script>
       /* ============================================================
-   VOIDRUNNER — first-person endless parkour roguelike
+   ACTION RUNNER — first-person endless parkour roguelike
    Three.js r128 · single file
    ============================================================ */
 
@@ -8048,7 +8049,7 @@
           const url = renderer.domElement.toDataURL("image/png");
           const a = document.createElement("a");
           a.href = url;
-          a.download = "voidrunner-" + Date.now() + ".png";
+          a.download = "action-runner-" + Date.now() + ".png";
           document.body.appendChild(a);
           a.click();
           a.remove();
