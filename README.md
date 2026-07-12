@@ -15,8 +15,5 @@ This is a game that was creating using Claude amnd prompting during tutoring ses
 9. If you are in running mode, there's no way to go back to the main menu
 10. On computer, you cannot select a travel location because there is no mouse cursor
 11. Sometimes the text ui breaks and glithces out
-12. Change the name of the game, since now it is more exploratory
-    Ideas:
-    - Action Runner
-13. There is some flashing on the ground and wall textures
-14. Make the subway a new environment instead of above ground
+12. There is some flashing on the ground and wall textures
+13. Make the subway a new environment instead of above ground
