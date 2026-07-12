@@ -13,4 +13,5 @@
 12. Change the name of the game, since now it is more exploratory
       Ideas:
       * Action Runner
-13.
+13. There is some flashing on the ground and wall textures
+14. Make the subway a new environment instead of above ground
