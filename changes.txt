@@ -11,3 +11,6 @@
 10. On computer, you cannot select a travel location because there is no mouse cursor
 11. Sometimes the text ui breaks and glithces out
 12. Change the name of the game, since now it is more exploratory
+      Ideas:
+      * Action Runner
+13.
