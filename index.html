@@ -1049,6 +1049,8 @@
         <button id="ex-speed">Speed: Normal</button>
         <button id="ex-drive">DRIVE</button>
         <button id="ex-view">VIEW</button>
+        <button id="ex-map">🧭 Map</button>
+        <button id="ex-set">⚙</button>
       </div>
       <div
         id="ex-hint"
@@ -1204,6 +1206,24 @@
         armUnlocked: { cyan: true },
         powerups: { shield: 0, slowmo: 0, magnet: 0, xjump: 0 }, // lives remaining, 0..5
         world: "void",
+        // ---- Explore economy + cosmetics + prefs (one shared wallet) ----
+        coins: 0, // spendable currency (earned anywhere)
+        stars: 0, // landmark collectible
+        vehiclesOwned: { car: true }, // buyable vehicles
+        skinsOwned: { classic: true }, // parkour skins/trails
+        skin: "classic",
+        landmarksVisited: {}, // tourist checklist
+        savedSpots: [], // player fast-travel favorites
+        dailyDate: "",
+        dailyBest: 0,
+        settings: {
+          shadows: true,
+          drawDist: 1,
+          reflections: 1,
+          music: 1,
+          sfx: 1,
+          minimap: 1,
+        },
       };
       let META = JSON.parse(JSON.stringify(META_DEFAULT));
 
@@ -1227,6 +1247,26 @@
                 META_DEFAULT.powerups,
                 META.powerups || {},
               );
+              META.vehiclesOwned = Object.assign(
+                {},
+                META_DEFAULT.vehiclesOwned,
+                META.vehiclesOwned || {},
+              );
+              META.skinsOwned = Object.assign(
+                {},
+                META_DEFAULT.skinsOwned,
+                META.skinsOwned || {},
+              );
+              META.settings = Object.assign(
+                {},
+                META_DEFAULT.settings,
+                META.settings || {},
+              );
+              META.landmarksVisited = META.landmarksVisited || {};
+              if (!Array.isArray(META.savedSpots)) META.savedSpots = [];
+              if (typeof META.coins !== "number") META.coins = 0;
+              if (typeof META.stars !== "number") META.stars = 0;
+              if (!META.skin) META.skin = "classic";
               if (!META.armColor) META.armColor = "cyan";
               if (!META.world) META.world = "void";
             }
@@ -3969,6 +4009,14 @@
           else if (boating) dockFerry();
           else toggleDrive();
         });
+        tap(document.getElementById("ex-map"), () => {
+          miniOn = !miniOn;
+          sfx("click");
+        });
+        tap(document.getElementById("ex-set"), () => {
+          openSettings();
+          sfx("click");
+        });
         tap(document.getElementById("ex-view"), toggleView);
         tap(document.getElementById("ex-view2"), toggleView);
         tap(document.getElementById("ex-travel-close"), closeTravel);
@@ -4179,6 +4227,11 @@
         rim.position.x = Math.sin(now * 0.0006) * 10;
         updateFX(dt);
         worldTick(dt);
+        updateDayNight(dt);
+        if (state === "explore") {
+          updateWeather(dt);
+          drawMinimap();
+        }
 
         renderer.render(scene, camera);
         requestAnimationFrame(loop);
@@ -4281,6 +4334,8 @@
       const FERRY = { x: -40, z: 236 }; // ferry terminal on the Manhattan shore
       const NJ = { x: -470, z: 30 }; // New Jersey centre (across the river)
       const MET = { x: -485, z: 180 }; // MetLife Stadium (New Jersey)
+      const CPARK = { x: 150, z: 150 }; // Central Park (big green, zoo, lake)
+      const TSQ = { x: -6, z: -92 }; // Times Square (screens)
       const V = (x, y, z) => new THREE.Vector3(x, y, z);
 
       const _signs = {};
@@ -4770,6 +4825,9 @@
         if (z > 240) return true; // harbour + Liberty Island
         if (Math.abs(x - FERRY.x) < 32 && z > 200) return true; // ferry terminal apron
         if (Math.abs(x - ES.x) < 30 && Math.abs(z - ES.z) < 30) return true; // Empire State plot
+        if (Math.abs(x - CPARK.x) < 78 && Math.abs(z - CPARK.z) < 98)
+          return true; // Central Park
+        if (Math.abs(x - TSQ.x) < 17 && Math.abs(z - TSQ.z) < 17) return true; // Times Square
         return false;
       }
       function exBlockGroup(gx, gz) {
@@ -5390,6 +5448,9 @@
           });
         }
         buildSky();
+        buildRain();
+        buildCentralPark();
+        buildTimesSquare();
         spawnPeople(14);
         updateExHud();
         // ---- sunlight with soft shadows (follows the player) ----
@@ -5609,6 +5670,14 @@
         for (const r of exRides) r.update(dt);
         updatePeople(dt);
         updateSky(dt);
+        for (const c of exCoins) {
+          if (!c.got) {
+            c.mesh.rotation.z += dt * 3;
+            c.mesh.position.y =
+              1.2 + Math.sin(performance.now() * 0.004 + c.x) * 0.14;
+          }
+        }
+        collectCoins();
         if (heldTimer > 0) {
           heldTimer -= dt;
           if (exHand)
@@ -5618,8 +5687,8 @@
         }
         for (const ch of exChunks)
           ch.group.visible =
-            Math.abs(ch.x - player.x) < BUBBLE &&
-            Math.abs(ch.z - player.z) < BUBBLE;
+            Math.abs(ch.x - player.x) < BUBBLE * exDrawMul &&
+            Math.abs(ch.z - player.z) < BUBBLE * exDrawMul;
         if (flying) {
           updateFlying(dt);
           return;
@@ -5831,26 +5900,48 @@
           cloudGrp.add(c);
         }
         exploreWorld.add(cloudGrp);
+        // stars (shown at night)
+        const SN = 420,
+          sg = new THREE.BufferGeometry(),
+          sa = new Float32Array(SN * 3);
+        for (let i = 0; i < SN; i++) {
+          const th = Math.random() * 6.28,
+            ph = Math.random() * 0.9;
+          const R = 480;
+          sa[i * 3] = Math.cos(th) * Math.cos(ph) * R;
+          sa[i * 3 + 1] = Math.sin(ph) * R + 40;
+          sa[i * 3 + 2] = Math.sin(th) * Math.cos(ph) * R;
+        }
+        sg.setAttribute("position", new THREE.BufferAttribute(sa, 3));
+        starLayer = new THREE.Points(
+          sg,
+          new THREE.PointsMaterial({
+            color: 0xffffff,
+            size: 1.7,
+            transparent: true,
+            opacity: 0,
+            fog: false,
+            depthWrite: false,
+          }),
+        );
+        starLayer.frustumCulled = false;
+        exploreWorld.add(starLayer);
       }
       function updateSky(dt) {
         if (skyDome) skyDome.position.set(player.x, 0, player.z);
-        const sx = player.x - 320,
-          sy = 170,
-          sz = player.z + 300;
-        if (sunGlow) {
-          sunGlow.position.set(sx, sy, sz);
+        if (starLayer) starLayer.position.set(player.x, 0, player.z);
+        // sun glow tracks the day/night sun direction
+        if (sunGlow && exSun) {
+          sunGlow.position.set(
+            exSun.position.x,
+            exSun.position.y,
+            exSun.position.z,
+          );
           sunGlow.lookAt(
             camera.position.x,
             camera.position.y,
             camera.position.z,
           );
-        }
-        if (exSun) {
-          exSun.position.set(player.x + 70, 150, player.z + 52);
-          if (exSun.target) {
-            exSun.target.position.set(player.x, 0, player.z);
-            exSun.target.updateMatrixWorld && exSun.target.updateMatrixWorld();
-          }
         }
         if (cloudGrp) {
           cloudGrp.position.set(player.x, 0, player.z);
@@ -5860,8 +5951,10 @@
           }
         }
         if (exWater) {
-          exWater.material.emissiveIntensity =
-            0.32 + 0.16 * Math.sin(performance.now() * 0.0013);
+          const on = !META.settings || META.settings.reflections;
+          exWater.material.emissiveIntensity = on
+            ? 0.32 + 0.16 * Math.sin(performance.now() * 0.0013)
+            : 0.12;
         }
       }
 
@@ -7648,6 +7741,763 @@
         platforms.length = ramps.length = pillars.length = landmarks.length = 0;
         lastPlat = null;
       }
+      // ============================================================
+      //  EXPLORE CONTENT: Central Park · Times Square · collectibles
+      // ============================================================
+      function exTree(x, z, s) {
+        s = s || 1;
+        exAdd(0.7 * s, 3 * s, 0.7 * s, fmat(0x5a3a22), x, 1.5 * s, z);
+        const cone = new THREE.Mesh(coneGeo, fmat(0x2f7a3a));
+        cone.scale.set(2.6 * s, 3.6 * s, 2.6 * s);
+        cone.position.set(x, 4 * s, z);
+        cone.matrixAutoUpdate = false;
+        cone.updateMatrix();
+        (exParent || exploreWorld).add(cone);
+        const cone2 = new THREE.Mesh(coneGeo, fmat(0x3a8a46));
+        cone2.scale.set(2.0 * s, 2.8 * s, 2.0 * s);
+        cone2.position.set(x, 5.4 * s, z);
+        cone2.matrixAutoUpdate = false;
+        cone2.updateMatrix();
+        (exParent || exploreWorld).add(cone2);
+      }
+      function coinPickup(x, z, kind) {
+        const m = new THREE.Mesh(
+          kind === "star" ? new THREE.ConeGeometry(0.5, 0.9, 5) : cylGeo,
+          new THREE.MeshStandardMaterial({
+            color: kind === "star" ? 0xffe36a : 0xffd23a,
+            emissive: kind === "star" ? 0x6a5a00 : 0x5a4600,
+            emissiveIntensity: 0.6,
+            metalness: 0.6,
+            roughness: 0.3,
+          }),
+        );
+        if (kind !== "star") m.scale.set(0.55, 0.12, 0.55);
+        m.rotation.x = kind === "star" ? 0 : Math.PI / 2;
+        m.position.set(x, 1.2, z);
+        exploreWorld.add(m);
+        exCoins.push({ mesh: m, x, z, kind: kind || "coin", got: false });
+        return m;
+      }
+      function buildCentralPark() {
+        exParent = null;
+        const X = CPARK.x,
+          Z = CPARK.z;
+        exAdd(150, 0.12, 190, fmat(0x3f7a3a), X, 0.06, Z); // lawn
+        exAdd(
+          150,
+          0.02,
+          190,
+          new THREE.MeshStandardMaterial({
+            color: 0x2f6a30,
+            roughness: 1,
+            transparent: true,
+            opacity: 0.4,
+          }),
+          X,
+          0.09,
+          Z,
+        );
+        // winding path
+        for (let i = -8; i <= 8; i++)
+          exAdd(
+            7,
+            0.05,
+            10,
+            fmat(0xbaa878),
+            X + Math.sin(i * 0.5) * 36,
+            0.12,
+            Z + i * 11,
+          );
+        // lake
+        exAdd(
+          52,
+          0.3,
+          40,
+          new THREE.MeshStandardMaterial({
+            color: 0x2a78b0,
+            emissive: 0x145078,
+            emissiveIntensity: 0.4,
+            metalness: 0.5,
+            roughness: 0.2,
+            transparent: true,
+            opacity: 0.9,
+          }),
+          X - 34,
+          0.2,
+          Z + 46,
+        );
+        exAdd(56, 0.5, 44, fmat(0x6a5a3a), X - 34, 0.05, Z + 46); // lake bank
+        // fountain
+        exAdd(9, 0.8, 9, fmat(0xcfcfd8), X + 30, 0.4, Z - 40);
+        exAdd(
+          7,
+          0.4,
+          7,
+          new THREE.MeshStandardMaterial({
+            color: 0x66c0e8,
+            emissive: 0x2a80a8,
+            emissiveIntensity: 0.5,
+            transparent: true,
+            opacity: 0.9,
+          }),
+          X + 30,
+          0.85,
+          Z - 40,
+        );
+        exAdd(0.8, 3.5, 0.8, fmat(0xcfcfd8), X + 30, 1.75, Z - 40);
+        exAdd(
+          3,
+          0.4,
+          3,
+          new THREE.MeshStandardMaterial({
+            color: 0x88d0f0,
+            emissive: 0x2a80a8,
+            emissiveIntensity: 0.5,
+            transparent: true,
+            opacity: 0.85,
+          }),
+          X + 30,
+          3.4,
+          Z - 40,
+        );
+        // playground
+        exAdd(6, 0.3, 6, fmat(0xd8a24a), X + 44, 0.2, Z + 30);
+        exAdd(3, 2.4, 0.3, fmat(0xff6a6a), X + 44, 1.2, Z + 31.4); // slide frame
+        exAdd(0.3, 2.6, 0.3, nycMetal, X + 40, 1.3, Z + 28);
+        exAdd(0.3, 2.6, 0.3, nycMetal, X + 48, 1.3, Z + 28);
+        exAdd(8, 0.2, 0.3, nycMetal, X + 44, 2.6, Z + 28); // swing frame
+        exAddSign("PLAYGROUND", X + 44, Z + 24, "#ffd27a");
+        // little zoo — fenced pens with simple animals + signs
+        const zoo = [
+          [X - 40, Z - 46, "ELEPHANT", 0x9a9aa6, 3.2],
+          [X - 24, Z - 46, "GIRAFFE", 0xe0b84a, 4.2],
+          [X - 8, Z - 46, "LION", 0xd08a3a, 2.2],
+          [X + 8, Z - 46, "ZEBRA", 0xf0f0f0, 2.6],
+        ];
+        for (const p of zoo) {
+          exAdd(13, 0.6, 12, fmat(0x8a7a5a), p[0], 0.3, p[1]); // pen floor
+          for (const s of [-1, 1]) {
+            exAdd(13, 1.2, 0.2, fmat(0x6a5a3a), p[0], 0.6, p[1] + s * 6);
+            exAdd(0.2, 1.2, 12, fmat(0x6a5a3a), p[0] + s * 6.5, 0.6, p[1]);
+          }
+          exAdd(2.2, p[4], 3.2, fmat(p[3]), p[0], p[4] / 2, p[1]); // animal body
+          exAdd(1.4, 1.4, 1.4, fmat(p[3]), p[0], p[4] - 0.2, p[1] - 1.8); // head
+          exAddSign(p[2], p[0], p[1] + 6.6, "#aee29a");
+        }
+        exAddSign("CENTRAL PARK ZOO", X - 16, Z - 56, "#9ee29a", 8);
+        // trees around the edges (kept off the lake/paths)
+        for (let i = 0; i < 40; i++) {
+          const tx = X + rand(-70, 70),
+            tz = Z + rand(-88, 88);
+          if (Math.hypot(tx - (X - 34), tz - (Z + 46)) < 32) continue;
+          exTree(tx, tz, rand(0.8, 1.4));
+        }
+        // coins along the path + a star by the lake
+        for (let i = -6; i <= 6; i += 2)
+          coinPickup(X + Math.sin(i * 0.5) * 36, Z + i * 11, "coin");
+        coinPickup(X - 34, Z + 46, "star");
+        for (let i = 0; i < 5; i++)
+          exPeople.push(mkExPerson(X + rand(-50, 50), Z + rand(-60, 60)));
+      }
+      function exAddSign(txt, x, z, col, w) {
+        exAdd(w || 5, 1.2, 0.3, signMat(txt, col || "#ffe6a0"), x, 2.2, z);
+      }
+      function buildTimesSquare() {
+        exParent = null;
+        const X = TSQ.x,
+          Z = TSQ.z;
+        exAdd(30, 0.08, 30, fmat(0x3a3a44), X, 0.05, Z); // plaza
+        const screen = (sx, sz, w, h, ry, c1, c2) => {
+          const cvs = document.createElement("canvas");
+          cvs.width = 64;
+          cvs.height = 64;
+          const g = cvs.getContext("2d");
+          const grd = g.createLinearGradient(0, 0, 64, 64);
+          grd.addColorStop(0, c1);
+          grd.addColorStop(1, c2);
+          g.fillStyle = grd;
+          g.fillRect(0, 0, 64, 64);
+          g.fillStyle = "rgba(255,255,255,0.85)";
+          for (let i = 0; i < 6; i++)
+            g.fillRect(rand(4, 40), rand(4, 40), rand(8, 20), rand(4, 10));
+          const tex = new THREE.CanvasTexture(cvs);
+          const m = new THREE.Mesh(
+            new THREE.PlaneGeometry(w, h),
+            new THREE.MeshBasicMaterial({ map: tex }),
+          );
+          m.position.set(sx, h / 2 + 3, sz);
+          if (ry) m.rotation.y = ry;
+          m.matrixAutoUpdate = false;
+          m.updateMatrix();
+          exploreWorld.add(m);
+          exCoins.length;
+        };
+        // billboards around the plaza edges
+        screen(X - 14, Z, 10, 14, Math.PI / 2, "#ff2a6a", "#2a2aff");
+        screen(X + 14, Z, 10, 14, -Math.PI / 2, "#00e0ff", "#ff00c8");
+        screen(X, Z - 14, 16, 10, 0, "#ffd23a", "#ff5a2a");
+        screen(X, Z + 14, 16, 10, Math.PI, "#2affa0", "#2a6aff");
+        exAdd(20, 30, 20, pickWinMat(20, 30), X - 16, 15, Z - 16);
+        exAdd(18, 26, 18, pickWinMat(18, 26), X + 17, 13, Z + 16);
+        exAddSign("TIMES SQUARE", X, Z, "#ffffff", 10);
+        for (let i = 0; i < 4; i++)
+          coinPickup(X + rand(-12, 12), Z + rand(-12, 12), "coin");
+        for (let i = 0; i < 6; i++)
+          exPeople.push(mkExPerson(X + rand(-13, 13), Z + rand(-13, 13)));
+      }
+      function collectCoins() {
+        for (const c of exCoins) {
+          if (c.got) continue;
+          if (
+            Math.abs(player.x - c.x) < 2.2 &&
+            Math.abs(player.z - c.z) < 2.2
+          ) {
+            c.got = true;
+            c.mesh.visible = false;
+            if (c.kind === "star") {
+              addStars(1);
+              sfx("star");
+              showToast("\u2605 Star!", "#ffe36a");
+            } else {
+              addCoins(5);
+              sfx("coin");
+            }
+          }
+        }
+      }
+
+      // ============================================================
+      //  BACKBONE SYSTEMS: economy · audio · day-night · weather · minimap · settings
+      // ============================================================
+      let exDrawMul = 1;
+      const LANDMARKS = [
+        {
+          id: "empire",
+          n: "Empire State",
+          c: "#ffd27a",
+          get x() {
+            return ES.x;
+          },
+          get z() {
+            return ES.z;
+          },
+        },
+        {
+          id: "liberty",
+          n: "Statue of Liberty",
+          c: "#8fe3c0",
+          get x() {
+            return LIB.x;
+          },
+          get z() {
+            return LIB.z;
+          },
+        },
+        {
+          id: "ferry",
+          n: "Ferry Terminal",
+          c: "#bfe3ff",
+          get x() {
+            return FERRY.x;
+          },
+          get z() {
+            return FERRY.z;
+          },
+        },
+        {
+          id: "metlife",
+          n: "MetLife Stadium",
+          c: "#ff9a9a",
+          get x() {
+            return MET.x;
+          },
+          get z() {
+            return MET.z;
+          },
+        },
+        {
+          id: "mall",
+          n: "American Dream",
+          c: "#ff9ad0",
+          get x() {
+            return MALL.x;
+          },
+          get z() {
+            return MALL.z;
+          },
+        },
+        {
+          id: "park",
+          n: "Central Park",
+          c: "#9ee29a",
+          get x() {
+            return CPARK.x;
+          },
+          get z() {
+            return CPARK.z;
+          },
+        },
+      ];
+      let exCoins = []; // collectible pickups in explore {mesh,x,z,kind,got}
+
+      // ---------- economy ----------
+      function walletEl() {
+        return document.getElementById("wallet");
+      }
+      function updateWallet() {
+        const w = walletEl();
+        if (w)
+          w.innerHTML =
+            '<span style="color:#ffd23a">\u25c9 ' +
+            (META.coins || 0) +
+            '</span>&nbsp;&nbsp;<span style="color:#ffe36a">\u2605 ' +
+            (META.stars || 0) +
+            "</span>";
+      }
+      function flashWallet() {
+        const w = walletEl();
+        if (w) {
+          w.style.transform = "scale(1.18)";
+          setTimeout(() => {
+            if (w) w.style.transform = "scale(1)";
+          }, 140);
+        }
+        updateWallet();
+      }
+      function addCoins(n) {
+        META.coins = (META.coins || 0) + n;
+        saveMeta();
+        flashWallet();
+      }
+      function addStars(n) {
+        META.stars = (META.stars || 0) + n;
+        saveMeta();
+        flashWallet();
+      }
+      function spendCoins(n) {
+        if ((META.coins || 0) >= n) {
+          META.coins -= n;
+          saveMeta();
+          flashWallet();
+          return true;
+        }
+        showToast("Need " + n + " coins", "#ffb0b0");
+        return false;
+      }
+
+      // ---------- audio (procedural; starts after first user gesture) ----------
+      let AC = null,
+        masterGain = null,
+        musicGain = null,
+        musicTimer = null,
+        musicStep = 0;
+      function initAudio() {
+        if (AC) return;
+        try {
+          AC = new (window.AudioContext || window.webkitAudioContext)();
+          masterGain = AC.createGain();
+          masterGain.gain.value = 0.5;
+          masterGain.connect(AC.destination);
+          musicGain = AC.createGain();
+          musicGain.gain.value = 0.16;
+          musicGain.connect(masterGain);
+        } catch (e) {
+          AC = null;
+        }
+      }
+      function sfx(type) {
+        if (!AC || !(META.settings && META.settings.sfx)) return;
+        const t = AC.currentTime,
+          o = AC.createOscillator(),
+          g = AC.createGain();
+        o.connect(g);
+        g.connect(masterGain);
+        let f = 440,
+          d = 0.12,
+          wave = "square",
+          v = 0.25;
+        if (type === "coin") {
+          f = 880;
+          d = 0.1;
+          o.frequency.setValueAtTime(660, t);
+          o.frequency.setValueAtTime(990, t + 0.05);
+        } else if (type === "star") {
+          f = 1180;
+          d = 0.24;
+          wave = "triangle";
+          o.frequency.setValueAtTime(700, t);
+          o.frequency.exponentialRampToValueAtTime(1400, t + 0.2);
+        } else if (type === "jump") {
+          f = 520;
+          d = 0.12;
+          o.frequency.setValueAtTime(360, t);
+          o.frequency.exponentialRampToValueAtTime(620, t + 0.1);
+        } else if (type === "land") {
+          f = 180;
+          d = 0.1;
+          wave = "sine";
+        } else if (type === "honk") {
+          f = 250;
+          d = 0.3;
+          wave = "sawtooth";
+          v = 0.3;
+        } else if (type === "splash") {
+          f = 320;
+          d = 0.2;
+          wave = "sine";
+          o.frequency.exponentialRampToValueAtTime(120, t + 0.18);
+        } else if (type === "cheer") {
+          f = 500;
+          d = 0.5;
+          wave = "triangle";
+          v = 0.2;
+        } else if (type === "click") {
+          f = 660;
+          d = 0.05;
+        } else if (type === "buy") {
+          f = 740;
+          d = 0.18;
+          o.frequency.setValueAtTime(523, t);
+          o.frequency.setValueAtTime(784, t + 0.09);
+        } else if (type === "fail") {
+          f = 200;
+          d = 0.35;
+          wave = "sawtooth";
+          o.frequency.exponentialRampToValueAtTime(90, t + 0.3);
+        }
+        o.type = wave;
+        o.frequency.setValueAtTime(f, t);
+        g.gain.setValueAtTime(v, t);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + d);
+        o.start(t);
+        o.stop(t + d + 0.02);
+      }
+      const MUSIC_NOTES = [0, 4, 7, 12, 7, 4, 0, -5, 0, 4, 7, 11, 7, 4, 2, -3];
+      function startMusic() {
+        if (!AC || musicTimer || !(META.settings && META.settings.music))
+          return;
+        musicTimer = setInterval(() => {
+          if (!AC) return;
+          const base =
+            220 * Math.pow(2, MUSIC_NOTES[musicStep % MUSIC_NOTES.length] / 12);
+          const t = AC.currentTime;
+          [0, 7].forEach((semi, i) => {
+            const o = AC.createOscillator(),
+              g = AC.createGain();
+            o.type = i ? "triangle" : "square";
+            o.frequency.value = base * Math.pow(2, semi / 12);
+            o.connect(g);
+            g.connect(musicGain);
+            g.gain.setValueAtTime(0.0001, t);
+            g.gain.linearRampToValueAtTime(i ? 0.1 : 0.16, t + 0.02);
+            g.gain.exponentialRampToValueAtTime(0.0001, t + 0.28);
+            o.start(t);
+            o.stop(t + 0.3);
+          });
+          if (musicStep % 2 === 0) {
+            const o = AC.createOscillator(),
+              g = AC.createGain();
+            o.type = "sine";
+            o.frequency.value = base / 2;
+            o.connect(g);
+            g.connect(musicGain);
+            g.gain.setValueAtTime(0.18, t);
+            g.gain.exponentialRampToValueAtTime(0.0001, t + 0.4);
+            o.start(t);
+            o.stop(t + 0.42);
+          }
+          musicStep++;
+        }, 235);
+      }
+      function stopMusic() {
+        if (musicTimer) {
+          clearInterval(musicTimer);
+          musicTimer = null;
+        }
+      }
+
+      // ---------- day / night (auto cycle) ----------
+      let timeOfDay = 0.34; // 0=midnight .25=sunrise .5=noon .75=sunset
+      const DAY_LEN = 210; // seconds per full day
+      let starLayer = null,
+        nightFactor = 0;
+      function lerpHex(a, b, t) {
+        const ar = (a >> 16) & 255,
+          ag = (a >> 8) & 255,
+          ab = a & 255,
+          br = (b >> 16) & 255,
+          bg = (b >> 8) & 255,
+          bb = b & 255;
+        return (
+          (Math.round(ar + (br - ar) * t) << 16) |
+          (Math.round(ag + (bg - ag) * t) << 8) |
+          Math.round(ab + (bb - ab) * t)
+        );
+      }
+      function updateDayNight(dt) {
+        if (state !== "explore" && state !== "play") return;
+        timeOfDay = (timeOfDay + dt / DAY_LEN) % 1;
+        const dayPhase = Math.sin((timeOfDay - 0.25) * Math.PI * 2); // -1..1, >0 = daytime
+        const day = clamp((dayPhase + 0.15) / 0.9, 0, 1);
+        nightFactor = 1 - day;
+        const sunHexDay = 0xfff1d8,
+          sunHexDusk = 0xffb070,
+          skyNight = 0x0d1330;
+        if (exSun) {
+          const el = Math.max(0.04, dayPhase);
+          exSun.position.set(
+            player.x + Math.cos(timeOfDay * 6.28) * 120,
+            40 + el * 150,
+            player.z + Math.sin(timeOfDay * 6.28) * 120,
+          );
+          exSun.intensity = 0.15 + day * 1.15;
+          exSun.color.setHex(lerpHex(sunHexDusk, sunHexDay, day));
+          if (exSun.target) {
+            exSun.target.position.set(player.x, 0, player.z);
+            exSun.target.updateMatrixWorld && exSun.target.updateMatrixWorld();
+          }
+        }
+        if (exHemi) {
+          exHemi.intensity = 0.28 + day * 0.5;
+          exHemi.color.setHex(lerpHex(0x33406a, 0xfff0d6, day));
+          exHemi.groundColor && exHemi.groundColor.setHex(0x2a2622);
+        }
+        if (skyDome && skyDome.material && skyDome.material.color) {
+          skyDome.material.color.setHex(lerpHex(skyNight, 0xffffff, day));
+        }
+        if (scene.fog && weather !== "fog") {
+          scene.fog.color.setHex(lerpHex(0x1a2340, 0xe9d4b4, day));
+        }
+        if (scene.background && scene.background.setHex)
+          scene.background.setHex(lerpHex(skyNight, 0xbcd0e4, day));
+        if (starLayer && starLayer.material)
+          starLayer.material.opacity = nightFactor * 0.9;
+        if (sunGlow) sunGlow.visible = day > 0.15;
+      }
+
+      // ---------- weather (random) ----------
+      let weather = "sun",
+        weatherT = 18,
+        rainSys = null,
+        rainOn = false;
+      function setWeather(w) {
+        weather = w;
+        if (rainSys) rainSys.visible = w === "rain";
+        rainOn = w === "rain";
+        if (scene.fog) {
+          if (w === "fog") {
+            scene.fog.near = 18;
+            scene.fog.far = 90;
+            scene.fog.color.setHex(0xcdd3dc);
+          } else {
+            scene.fog.near = 48;
+            scene.fog.far = 205 * exDrawMul;
+          }
+        }
+        const names = {
+          sun: "\u2600\ufe0f Sunny",
+          rain: "\ud83c\udf27\ufe0f Rain",
+          fog: "\ud83c\udf2b\ufe0f Foggy",
+          cloud: "\u26c5 Cloudy",
+        };
+        if (state === "explore") showToast(names[w] || w, "#cfe3ff");
+      }
+      function updateWeather(dt) {
+        weatherT -= dt;
+        if (weatherT <= 0) {
+          const opts = ["sun", "sun", "cloud", "rain", "fog"];
+          setWeather(opts[Math.floor(Math.random() * opts.length)]);
+          weatherT = rand(25, 55);
+        }
+        if (rainOn && rainSys) {
+          rainSys.position.set(player.x, 0, player.z);
+          const pos = rainSys.geometry.attributes.position;
+          if (pos && pos.setY) {
+            for (let i = 0; i < pos.count; i++) {
+              let y = pos.getY(i) - dt * 70;
+              if (y < 0) y += 60;
+              pos.setY(i, y);
+            }
+            pos.needsUpdate = true;
+          }
+        }
+      }
+      function buildRain() {
+        const N = 900,
+          g = new THREE.BufferGeometry(),
+          arr = new Float32Array(N * 3);
+        for (let i = 0; i < N; i++) {
+          arr[i * 3] = rand(-70, 70);
+          arr[i * 3 + 1] = rand(0, 60);
+          arr[i * 3 + 2] = rand(-70, 70);
+        }
+        g.setAttribute("position", new THREE.BufferAttribute(arr, 3));
+        rainSys = new THREE.Points(
+          g,
+          new THREE.PointsMaterial({
+            color: 0xbcd6f0,
+            size: 0.5,
+            transparent: true,
+            opacity: 0.6,
+            fog: false,
+          }),
+        );
+        rainSys.visible = false;
+        rainSys.frustumCulled = false;
+        exploreWorld.add(rainSys);
+      }
+
+      // ---------- minimap ----------
+      let miniOn = true;
+      function drawMinimap() {
+        const cv = document.getElementById("minimap");
+        if (!cv) return;
+        if (
+          !miniOn ||
+          !(META.settings && META.settings.minimap) ||
+          state !== "explore"
+        ) {
+          cv.style.display = "none";
+          return;
+        }
+        cv.style.display = "block";
+        const g = cv.getContext("2d"),
+          W = cv.width,
+          H = cv.height,
+          cxp = W / 2,
+          cyp = H / 2,
+          sc = 0.09;
+        g.clearRect(0, 0, W, H);
+        g.fillStyle = "rgba(10,14,26,0.72)";
+        g.fillRect(0, 0, W, H);
+        g.strokeStyle = "rgba(120,150,200,0.35)";
+        g.strokeRect(0, 0, W, H);
+        const toMap = (x, z) => [
+          cxp + (x - player.x) * sc,
+          cyp + (z - player.z) * sc,
+        ];
+        for (const L of LANDMARKS) {
+          let [mx, my] = toMap(L.x, L.z);
+          if (mx < 3 || mx > W - 3 || my < 3 || my > H - 3) {
+            const ang = Math.atan2(L.z - player.z, L.x - player.x);
+            mx = clamp(cxp + Math.cos(ang) * (W / 2 - 6), 4, W - 4);
+            my = clamp(cyp + Math.sin(ang) * (H / 2 - 6), 4, H - 4);
+          }
+          g.fillStyle = L.c;
+          g.beginPath();
+          g.arc(mx, my, 3.2, 0, 6.28);
+          g.fill();
+        }
+        g.fillStyle = "#ffd23a";
+        for (const c of exCoins) {
+          if (c.got) continue;
+          const [mx, my] = toMap(c.x, c.z);
+          if (mx > 0 && mx < W && my > 0 && my < H)
+            g.fillRect(mx - 1, my - 1, 2, 2);
+        }
+        if (driving && playerCar) {
+          const [vx, vy] = toMap(player.x, player.z);
+          g.fillStyle = "#66e0ff";
+          g.beginPath();
+          g.arc(vx, vy, 3, 0, 6.28);
+          g.fill();
+        }
+        g.save();
+        g.translate(cxp, cyp);
+        g.rotate(-player.yaw + Math.PI);
+        g.fillStyle = "#ffffff";
+        g.beginPath();
+        g.moveTo(0, -5);
+        g.lineTo(3.4, 4);
+        g.lineTo(-3.4, 4);
+        g.closePath();
+        g.fill();
+        g.restore();
+      }
+
+      // ---------- settings panel ----------
+      function applySettings() {
+        const s = META.settings;
+        renderer.shadowMap.enabled = !!s.shadows;
+        if (exSun) exSun.castShadow = !!s.shadows;
+        exDrawMul = s.drawDist === 2 ? 1.4 : s.drawDist === 0 ? 0.7 : 1;
+        if (scene.fog && weather !== "fog") scene.fog.far = 205 * exDrawMul;
+        if (!s.music) stopMusic();
+        else startMusic();
+      }
+      function openSettings() {
+        const p = document.getElementById("setpanel");
+        if (!p) return;
+        p.style.display = "flex";
+        renderSettings();
+      }
+      function closeSettings() {
+        const p = document.getElementById("setpanel");
+        if (p) p.style.display = "none";
+      }
+      function renderSettings() {
+        const body = document.getElementById("setbody");
+        if (!body) return;
+        const s = META.settings;
+        const row = (label, key, opts) =>
+          '<div style="display:flex;justify-content:space-between;align-items:center;margin:10px 0;gap:10px"><span>' +
+          label +
+          "</span><span>" +
+          opts
+            .map(
+              (o) =>
+                '<button class="setbtn" data-k="' +
+                key +
+                '" data-v="' +
+                o.v +
+                '" style="margin-left:6px;padding:6px 10px;border-radius:8px;border:1px solid #4a5a80;background:' +
+                (s[key] === o.v ? "#3a5aaa" : "#1a2033") +
+                ';color:#fff;font-size:13px">' +
+                o.n +
+                "</button>",
+            )
+            .join("") +
+          "</span></div>";
+        body.innerHTML =
+          row("Shadows", "shadows", [
+            { n: "Off", v: false },
+            { n: "On", v: true },
+          ]) +
+          row("Draw distance", "drawDist", [
+            { n: "Low", v: 0 },
+            { n: "Med", v: 1 },
+            { n: "High", v: 2 },
+          ]) +
+          row("Water shimmer", "reflections", [
+            { n: "Off", v: 0 },
+            { n: "On", v: 1 },
+          ]) +
+          row("Music", "music", [
+            { n: "Off", v: 0 },
+            { n: "On", v: 1 },
+          ]) +
+          row("Sound FX", "sfx", [
+            { n: "Off", v: 0 },
+            { n: "On", v: 1 },
+          ]) +
+          row("Minimap", "minimap", [
+            { n: "Off", v: 0 },
+            { n: "On", v: 1 },
+          ]);
+        body.querySelectorAll(".setbtn").forEach((b) => {
+          b.onclick = () => {
+            const k = b.dataset.k;
+            let v = b.dataset.v;
+            v = v === "true" ? true : v === "false" ? false : parseInt(v);
+            META.settings[k] = v;
+            saveMeta();
+            applySettings();
+            renderSettings();
+            sfx("click");
+          };
+        });
+      }
+
       function enterExplore() {
         try {
           exPrevWorld = META.world;
@@ -7686,6 +8536,12 @@
           elCross.classList.add("on");
           const eh = document.getElementById("exhud");
           if (eh) eh.style.display = "block";
+          const wl = document.getElementById("wallet");
+          if (wl) wl.style.display = "block";
+          updateWallet();
+          applySettings();
+          setWeather("sun");
+          weatherT = rand(25, 45);
           const et = document.getElementById("ex-touch");
           if (et) et.style.display = touchMode ? "flex" : "none";
           if (touchMode) {
@@ -7756,10 +8612,53 @@
         elCross.classList.remove("on");
         const eh = document.getElementById("exhud");
         if (eh) eh.style.display = "none";
+        const wl = document.getElementById("wallet");
+        if (wl) wl.style.display = "none";
+        const mm = document.getElementById("minimap");
+        if (mm) mm.style.display = "none";
+      }
+
+      function setupHudExtras() {
+        const mk = (html) => {
+          const d = document.createElement("div");
+          d.innerHTML = html.trim();
+          return d.firstChild;
+        };
+        // wallet (coins + stars) — shown in explore
+        const wallet = mk(
+          '<div id="wallet" style="position:fixed;top:10px;left:50%;transform:translateX(-50%);z-index:40;display:none;background:rgba(10,14,26,0.6);border:1px solid #3a4a70;border-radius:20px;padding:6px 16px;font:600 15px system-ui;color:#fff;transition:transform .12s"></div>',
+        );
+        document.body.appendChild(wallet);
+        // minimap
+        const mini = mk(
+          '<canvas id="minimap" width="150" height="150" style="position:fixed;top:54px;right:10px;z-index:40;display:none;border-radius:10px;border:1px solid #3a4a70"></canvas>',
+        );
+        document.body.appendChild(mini);
+        // settings panel
+        const pan = mk(
+          '<div id="setpanel" style="position:fixed;inset:0;z-index:120;display:none;align-items:center;justify-content:center;background:rgba(4,6,14,0.72)"><div style="background:#141a2c;border:1px solid #3a4a70;border-radius:16px;padding:20px 22px;width:min(420px,86vw);color:#eef;font:14px system-ui"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><b style="font-size:18px">Settings</b><button id="setclose" style="background:#2a3350;border:none;color:#fff;border-radius:8px;padding:6px 12px;cursor:pointer">Close</button></div><div id="setbody"></div></div></div>',
+        );
+        document.body.appendChild(pan);
+        document.getElementById("setclose").onclick = () => {
+          closeSettings();
+          sfx("click");
+        };
+        // first user gesture → audio
+        const armAudio = () => {
+          initAudio();
+          if (AC && AC.state === "suspended") AC.resume();
+          if (META.settings && META.settings.music) startMusic();
+          window.removeEventListener("pointerdown", armAudio);
+          window.removeEventListener("keydown", armAudio);
+        };
+        window.addEventListener("pointerdown", armAudio);
+        window.addEventListener("keydown", armAudio);
+        updateWallet();
       }
 
       (async function boot() {
         await loadMeta();
+        setupHudExtras();
         applyArmColor();
         applyWorld(META.world);
         fitAll(); // size renderer, FOV, and controls to this screen
