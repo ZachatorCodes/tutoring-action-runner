@@ -4847,29 +4847,55 @@
       const V = (x, y, z) => new THREE.Vector3(x, y, z);
 
       const _signs = {};
-      function signMat(name, col) {
-        if (_signs[name]) return _signs[name];
+      function signMat(name, col, w, h) {
+        const key =
+          name +
+          "|" +
+          (col || "") +
+          "|" +
+          (w || 0).toFixed(2) +
+          "x" +
+          (h || 0).toFixed(2);
+        if (_signs[key]) return _signs[key];
+        const aspect = w > 0 && h > 0 ? Math.max(0.3, Math.min(w / h, 22)) : 4; // match the sign's real face shape
+        const H = 110,
+          Wc = Math.max(32, Math.round(H * aspect));
         const c = document.createElement("canvas");
-        c.width = 256;
-        c.height = 64;
+        c.width = Wc;
+        c.height = H;
         const g = c.getContext("2d");
         g.fillStyle = "#0e0e14";
-        g.fillRect(0, 0, 256, 64);
+        g.fillRect(0, 0, Wc, H);
         g.fillStyle = col || "#ffcf6a";
-        g.font = "bold 32px Georgia, serif";
         g.textAlign = "center";
         g.textBaseline = "middle";
-        g.fillText(name, 128, 34);
-        const t = new THREE.CanvasTexture(c);
-        const m = new THREE.MeshStandardMaterial({
-          map: t,
-          emissive: 0xffffff,
-          emissiveMap: t,
-          emissiveIntensity: 0.85,
-          roughness: 0.6,
+        let fs = Math.round(H * 0.62);
+        g.font = "bold " + fs + "px Georgia, serif";
+        const maxW = Wc * 0.9,
+          meas = g.measureText(name),
+          tw = meas && meas.width ? meas.width : 0;
+        if (tw > maxW) {
+          fs = Math.max(7, Math.floor((fs * maxW) / tw));
+          g.font = "bold " + fs + "px Georgia, serif";
+        } // shrink to fit on one line
+        g.fillText(name, Wc / 2, H * 0.54);
+        const tex = new THREE.CanvasTexture(c);
+        const face = () =>
+          new THREE.MeshStandardMaterial({
+            map: tex,
+            emissive: 0xffffff,
+            emissiveMap: tex,
+            emissiveIntensity: 0.85,
+            roughness: 0.6,
+          });
+        const bg = new THREE.MeshStandardMaterial({
+          color: 0x0e0e14,
+          roughness: 0.7,
         });
-        _signs[name] = m;
-        return m;
+        const txt = face();
+        const arr = [bg, bg, bg, bg, txt, txt]; // text on +z (front) and -z (back); Three.js orients each face correctly from its outside
+        _signs[key] = arr;
+        return arr;
       }
       function exAdd(w, h, d, mat, x, y, z, ry) {
         const m = new THREE.Mesh(boxGeo, mat);
@@ -4927,7 +4953,7 @@
           Math.min(w * 0.8, 5.5),
           0.9,
           0.25,
-          signMat(name),
+          signMat(name, null, Math.min(w * 0.8, 5.5), 0.9),
           frontX + doorDir * 0.25,
           h - 0.7,
           cz,
@@ -5318,7 +5344,10 @@
           door.scale.set(1.1, 2.4, 0.2);
           door.position.set(sw * 0.32, 1.2, 0.1);
           g.add(door);
-          const sign = new THREE.Mesh(boxGeo, signMat(name, "#fff0d0"));
+          const sign = new THREE.Mesh(
+            boxGeo,
+            signMat(name, "#fff0d0", Math.min(sw, 5), 0.7),
+          );
           sign.scale.set(Math.min(sw, 5), 0.7, 0.14);
           sign.position.set(0, 3.55, 0.42);
           g.add(sign);
@@ -5405,7 +5434,7 @@
           9,
           3,
           0.4,
-          signMat("RIVERSIDE PARK", "#bfffcf"),
+          signMat("RIVERSIDE PARK", "#bfffcf", 9, 3),
           cx - 58,
           3.5,
           cz - 56,
@@ -5822,7 +5851,15 @@
         exAdd(2.6, 0.2, 1.8, fmat(0xff9ad0), -7, 1.45, 23);
         exAdd(0.12, 2.2, 0.12, nycMetal, -7, 2.4, 23);
         exAdd(2.6, 0.12, 2.0, fmat(0xff5a7a), -7, 3.5, 23); // umbrella pole + top
-        exAdd(0.9, 0.9, 0.12, signMat("ICE CREAM", "#fff"), -7, 1.0, 22.1);
+        exAdd(
+          0.9,
+          0.9,
+          0.12,
+          signMat("ICE CREAM", "#fff", 0.9, 0.9),
+          -7,
+          1.0,
+          22.1,
+        );
         {
           const man = mkExPerson(-7, 24.4);
           man.g.rotation.y = Math.PI;
@@ -5908,7 +5945,7 @@
           18,
           3,
           1,
-          signMat("LIBERTY ISLAND FERRY", "#bfe3ff"),
+          signMat("LIBERTY ISLAND FERRY", "#bfe3ff", 18, 3),
           FERRY.x,
           4,
           FERRY.z - 10.4,
@@ -7312,7 +7349,7 @@
           4,
           2,
           0.3,
-          signMat("FIRST CLASS", "#ffe6a0"),
+          signMat("FIRST CLASS", "#ffe6a0", 4, 2),
           PC.x,
           2.4,
           PC.z - len / 2 + 0.4,
@@ -7478,7 +7515,7 @@
           50,
           4,
           1,
-          signMat("SKYLINE INTL AIRPORT", "#bfe3ff"),
+          signMat("SKYLINE INTL AIRPORT", "#bfe3ff", 50, 4),
           cx + 72,
           12,
           cz - 75.4,
@@ -7658,7 +7695,15 @@
         iWall(cx, cz + d / 2, w, 0.2, h, wc);
       } // 3 walls + open front(-z)
       function iSign(cx, cz, txt, col, y, w) {
-        iAdd(w || 6, 1.2, 0.2, signMat(txt, col || "#ffe6a0"), cx, y || 3, cz);
+        iAdd(
+          w || 6,
+          1.2,
+          0.2,
+          signMat(txt, col || "#ffe6a0", w || 6, 1.2),
+          cx,
+          y || 3,
+          cz,
+        );
       }
       function iWinWall(cx, cz, w, h, axis) {
         // window band with a sunset city view behind
@@ -7962,7 +8007,7 @@
           60,
           6,
           1.5,
-          signMat("METLIFE STADIUM", "#ffffff"),
+          signMat("METLIFE STADIUM", "#ffffff", 60, 6),
           cx,
           30,
           cz - 95,
@@ -8015,7 +8060,15 @@
             h = rand(28, 50);
           exAdd(15, h, 15, pickWinMat(18, h), x, h / 2, 302);
         }
-        exAdd(80, 7, 1.5, signMat("NEW JERSEY", "#ffe6a0"), -500, 22, -252);
+        exAdd(
+          80,
+          7,
+          1.5,
+          signMat("NEW JERSEY", "#ffe6a0", 80, 7),
+          -500,
+          22,
+          -252,
+        );
         buildMetLife(MET.x, MET.z);
         buildAmusement(AM.x, AM.z); // American Dream rides
         // indoor mall building (enterable) — well clear of the rides and stadium
@@ -8052,7 +8105,7 @@
           56,
           5,
           1,
-          signMat("AMERICAN DREAM", "#ff9ad0"),
+          signMat("AMERICAN DREAM", "#ff9ad0", 56, 5),
           MALL.x,
           13,
           MALL.z - 21.1,
@@ -8105,7 +8158,7 @@
           14,
           3,
           1,
-          signMat("GEORGE WASHINGTON BRIDGE", "#ffe6a0"),
+          signMat("GEORGE WASHINGTON BRIDGE", "#ffe6a0", 14, 3),
           (x0 + x1) / 2,
           20,
           z + 11,
@@ -8506,7 +8559,15 @@
           exPeople.push(mkExPerson(X + rand(-50, 50), Z + rand(-60, 60)));
       }
       function exAddSign(txt, x, z, col, w) {
-        exAdd(w || 5, 1.2, 0.3, signMat(txt, col || "#ffe6a0"), x, 2.2, z);
+        exAdd(
+          w || 5,
+          1.2,
+          0.3,
+          signMat(txt, col || "#ffe6a0", w || 5, 1.2),
+          x,
+          2.2,
+          z,
+        );
       }
       function buildTimesSquare() {
         exParent = null;
@@ -8657,7 +8718,7 @@
             2,
             0.5,
             0.2,
-            signMat("HOT DOGS", "#7a2a12"),
+            signMat("HOT DOGS", "#7a2a12", 2, 0.5),
             s[0],
             1.1,
             s[1] - 1,
@@ -8828,7 +8889,7 @@
             6,
             1,
             0.3,
-            signMat("\ud83d\ude87 " + s.n, "#bfe3ff"),
+            signMat("\ud83d\ude87 " + s.n, "#bfe3ff", 6, 1),
             s.x,
             3.9,
             s.z - 3.2,
@@ -9207,7 +9268,7 @@
           cfg.sx = x;
           cfg.sz = z;
           wallBox(x, z, 13, 11, 7, pickWinMat(13, 7));
-          exAdd(12, 2, 0.3, signMat(cfg.name, cfg.col), x, 4.7, z - 5.6);
+          exAdd(12, 2, 0.3, signMat(cfg.name, cfg.col, 12, 2), x, 4.7, z - 5.6);
           exAdd(3.4, 4, 0.3, fmat(0x2a1a12), x, 2, z - 5.55); // door
           exInteractables.push({
             x: x,
