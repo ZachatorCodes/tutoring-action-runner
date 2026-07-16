@@ -1211,6 +1211,12 @@
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/shaders/CopyShader.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/shaders/LuminosityHighPassShader.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/postprocessing/EffectComposer.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/postprocessing/RenderPass.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/postprocessing/ShaderPass.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/postprocessing/UnrealBloomPass.min.js"></script>
     <script>
       /* ============================================================
    ACTION RUNNER — first-person endless parkour roguelike
@@ -1244,6 +1250,7 @@
           music: 1,
           sfx: 1,
           minimap: 1,
+          bloom: 1,
         },
       };
       let META = JSON.parse(JSON.stringify(META_DEFAULT));
@@ -1436,9 +1443,11 @@
       renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
       renderer.setSize(innerWidth, innerHeight);
       renderer.toneMapping = THREE.ACESFilmicToneMapping;
-      renderer.toneMappingExposure = 1.06;
+      renderer.toneMappingExposure = 1.02;
       renderer.shadowMap.enabled = true;
       renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      if ("outputEncoding" in renderer && THREE.sRGBEncoding)
+        renderer.outputEncoding = THREE.sRGBEncoding;
       app.appendChild(renderer.domElement);
 
       // lights (references kept so worlds can recolor them)
@@ -1446,7 +1455,92 @@
       scene.add(hemi);
       const key = new THREE.DirectionalLight(0xfff0ff, 0.85);
       key.position.set(-6, 14, -4);
+      key.castShadow = true;
+      if (key.shadow) {
+        if (key.shadow.mapSize && key.shadow.mapSize.set)
+          key.shadow.mapSize.set(2048, 2048);
+        const kc = key.shadow.camera;
+        if (kc) {
+          kc.left = -70;
+          kc.right = 70;
+          kc.top = 70;
+          kc.bottom = -70;
+          kc.near = 1;
+          kc.far = 320;
+          if (kc.updateProjectionMatrix) kc.updateProjectionMatrix();
+        }
+        key.shadow.bias = -0.0006;
+        key.shadow.normalBias = 0.5;
+        key.shadow.radius = 3;
+      }
       scene.add(key);
+      if (key.target) scene.add(key.target);
+
+      // ---- post-processing bloom (guarded; falls back to plain render if addons absent) ----
+      let composer = null,
+        bloomPass = null;
+      function setupBloom() {
+        if (
+          !window.THREE ||
+          typeof THREE.EffectComposer !== "function" ||
+          typeof THREE.RenderPass !== "function" ||
+          typeof THREE.UnrealBloomPass !== "function"
+        )
+          return;
+        try {
+          composer = new THREE.EffectComposer(renderer);
+          composer.addPass(new THREE.RenderPass(scene, camera));
+          bloomPass = new THREE.UnrealBloomPass(
+            new THREE.Vector2(innerWidth, innerHeight),
+            0.72,
+            0.5,
+            0.82,
+          );
+          composer.addPass(bloomPass);
+        } catch (e) {
+          composer = null;
+          bloomPass = null;
+        }
+      }
+      function bloomActive() {
+        return !!composer && (!META.settings || META.settings.bloom !== 0);
+      }
+      // ---- procedural environment map → soft reflections on shiny surfaces (guarded) ----
+      function setupEnv() {
+        if (typeof THREE.PMREMGenerator !== "function") return;
+        try {
+          const c = document.createElement("canvas");
+          c.width = 64;
+          c.height = 32;
+          const g = c.getContext("2d");
+          const grd = g.createLinearGradient(0, 0, 0, 32);
+          grd.addColorStop(0, "#a6cbee");
+          grd.addColorStop(0.5, "#d2dae6");
+          grd.addColorStop(1, "#6a5a48");
+          g.fillStyle = grd;
+          g.fillRect(0, 0, 64, 32);
+          const tex = new THREE.CanvasTexture(c);
+          if (THREE.EquirectangularReflectionMapping)
+            tex.mapping = THREE.EquirectangularReflectionMapping;
+          const pmrem = new THREE.PMREMGenerator(renderer);
+          if (pmrem.compileEquirectangularShader)
+            pmrem.compileEquirectangularShader();
+          const env = pmrem.fromEquirectangular(tex).texture;
+          scene.environment = env;
+          if (tex.dispose) tex.dispose();
+          if (pmrem.dispose) pmrem.dispose();
+        } catch (e) {}
+      }
+      // ---- keep the sun's shadow centred on the player during parkour ----
+      function updatePlayShadow() {
+        key.castShadow = state !== "explore"; // explore uses its own sun (exSun)
+        if (state === "explore" || !key.castShadow) return;
+        key.position.set(camera.position.x - 40, 130, camera.position.z - 30);
+        if (key.target) {
+          key.target.position.set(camera.position.x, 0, camera.position.z);
+          if (key.target.updateMatrixWorld) key.target.updateMatrixWorld();
+        }
+      }
       const rim = new THREE.PointLight(0x33e1ff, 0.7, 60);
       rim.position.set(8, 6, 10);
       scene.add(rim);
@@ -3205,6 +3299,10 @@
         }
         if (NYC_MODE && !start) nycDressRoof(p); // rooftop props or an enterable furnished room
         if (ANTARCTICA_MODE) dressAntarcticaPeak(p);
+        if (mesh) {
+          mesh.castShadow = true;
+          mesh.receiveShadow = true;
+        }
         platforms.push(p);
         if (tier !== "tier") lastPlat = p; // side tiers never advance the path
         return p;
@@ -4636,8 +4734,10 @@
           updateWeather(dt);
           drawMinimap();
         }
+        updatePlayShadow();
 
-        renderer.render(scene, camera);
+        if (bloomActive()) composer.render();
+        else renderer.render(scene, camera);
         requestAnimationFrame(loop);
       }
 
@@ -4688,6 +4788,10 @@
       function fitAll() {
         renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
         renderer.setSize(innerWidth, innerHeight);
+        if (composer && composer.setSize)
+          composer.setSize(innerWidth, innerHeight);
+        if (bloomPass && bloomPass.resolution && bloomPass.resolution.set)
+          bloomPass.resolution.set(innerWidth, innerHeight);
         fitCamera();
         layoutTouch();
       }
@@ -5684,7 +5788,7 @@
         if (exHemi) {
           scene.remove(exHemi);
         }
-        exHemi = new THREE.HemisphereLight(0xfff0d6, 0x3a2e2a, 0.7);
+        exHemi = new THREE.HemisphereLight(0xfff0d6, 0x3a2e2a, 0.6);
         scene.add(exHemi);
         // big ground with a tiled city-grid texture (roads/blocks/lane lines)
         const tex = makeCityTex();
@@ -6376,35 +6480,111 @@
         }
       }
 
+      const SKIN = [
+        0xf1c9a5, 0xe6b98f, 0xc68642, 0x8d5524, 0xffe0bd, 0xd8a878, 0xa9744f,
+      ];
+      const SHIRT = [
+        0x3a6ea5, 0xb0413e, 0x2e8b57, 0x8a5a2a, 0x5a4a8a, 0xc0692a, 0x3a3a44,
+        0xcc5577, 0x2a8a8a, 0xd8b23a,
+      ];
+      const PANTS = [
+        0x2a2f3a, 0x3a3020, 0x22303a, 0x4a4a52, 0x2a3a2a, 0x555560, 0x3a2a2a,
+      ];
+      const HAIR = [
+        0x1a1410, 0x3a2818, 0x5a3a20, 0x0a0a0a, 0x7a6a4a, 0x8a8a90, 0x2a1a10,
+      ];
+      function rpick(a) {
+        return a[Math.floor(Math.random() * a.length)];
+      }
+      function buildHuman(g) {
+        const skin = fmat(rpick(SKIN)),
+          shirt = fmat(rpick(SHIRT)),
+          pants = fmat(rpick(PANTS)),
+          hair = fmat(rpick(HAIR)),
+          shoe = fmat(0x1a1a1a);
+        const torso = new THREE.Mesh(boxGeo, shirt);
+        torso.scale.set(0.5, 0.72, 0.28);
+        torso.position.y = 1.28;
+        g.add(torso);
+        const hips = new THREE.Mesh(boxGeo, pants);
+        hips.scale.set(0.46, 0.26, 0.28);
+        hips.position.y = 0.9;
+        g.add(hips);
+        const neck = new THREE.Mesh(boxGeo, skin);
+        neck.scale.set(0.15, 0.14, 0.15);
+        neck.position.y = 1.68;
+        g.add(neck);
+        const head = new THREE.Mesh(
+          new THREE.SphereGeometry(0.2, 12, 10),
+          skin,
+        );
+        head.scale.set(0.95, 1.08, 0.95);
+        head.position.y = 1.87;
+        g.add(head);
+        const hairM = new THREE.Mesh(
+          new THREE.SphereGeometry(0.215, 12, 10),
+          hair,
+        );
+        hairM.scale.set(1.02, 0.78, 1.02);
+        hairM.position.y = 1.95;
+        g.add(hairM);
+        const legL = new THREE.Group();
+        legL.position.set(-0.13, 0.84, 0);
+        const lm1 = new THREE.Mesh(boxGeo, pants);
+        lm1.scale.set(0.2, 0.82, 0.24);
+        lm1.position.y = -0.41;
+        legL.add(lm1);
+        const lf1 = new THREE.Mesh(boxGeo, shoe);
+        lf1.scale.set(0.22, 0.13, 0.34);
+        lf1.position.set(0, -0.82, 0.05);
+        legL.add(lf1);
+        g.add(legL);
+        const legR = new THREE.Group();
+        legR.position.set(0.13, 0.84, 0);
+        const lm2 = new THREE.Mesh(boxGeo, pants);
+        lm2.scale.set(0.2, 0.82, 0.24);
+        lm2.position.y = -0.41;
+        legR.add(lm2);
+        const lf2 = new THREE.Mesh(boxGeo, shoe);
+        lf2.scale.set(0.22, 0.13, 0.34);
+        lf2.position.set(0, -0.82, 0.05);
+        legR.add(lf2);
+        g.add(legR);
+        const armL = new THREE.Group();
+        armL.position.set(-0.32, 1.55, 0);
+        const am1 = new THREE.Mesh(boxGeo, shirt);
+        am1.scale.set(0.15, 0.5, 0.19);
+        am1.position.y = -0.25;
+        armL.add(am1);
+        const ah1 = new THREE.Mesh(boxGeo, skin);
+        ah1.scale.set(0.14, 0.22, 0.18);
+        ah1.position.y = -0.55;
+        armL.add(ah1);
+        g.add(armL);
+        const armR = new THREE.Group();
+        armR.position.set(0.32, 1.55, 0);
+        const am2 = new THREE.Mesh(boxGeo, shirt);
+        am2.scale.set(0.15, 0.5, 0.19);
+        am2.position.y = -0.25;
+        armR.add(am2);
+        const ah2 = new THREE.Mesh(boxGeo, skin);
+        ah2.scale.set(0.14, 0.22, 0.18);
+        ah2.position.y = -0.55;
+        armR.add(ah2);
+        g.add(armR);
+        return { legL, legR, armL, armR };
+      }
       function makePerson() {
         const g = new THREE.Group();
-        const col = [0x334455, 0x663333, 0x335544, 0x554433, 0x445566][
-          Math.floor(Math.random() * 5)
-        ];
-        const body = new THREE.Mesh(boxGeo, fmat(col));
-        body.scale.set(0.7, 1.0, 0.4);
-        body.position.y = 1.15;
-        g.add(body);
-        const head = new THREE.Mesh(
-          new THREE.SphereGeometry(0.28, 8, 6),
-          fmat(0xd8a878),
-        );
-        head.position.y = 1.85;
-        g.add(head);
-        const lL = new THREE.Mesh(boxGeo, fmat(0x223));
-        lL.scale.set(0.24, 0.9, 0.3);
-        lL.position.set(-0.18, 0.45, 0);
-        g.add(lL);
-        const rL = new THREE.Mesh(boxGeo, fmat(0x223));
-        rL.scale.set(0.24, 0.9, 0.3);
-        rL.position.set(0.18, 0.45, 0);
-        g.add(rL);
-        g.add(blobMesh(0.9));
+        const lim = buildHuman(g);
+        g.add(blobMesh(0.85));
         exploreWorld.add(g);
         return {
           g,
-          lL,
-          rL,
+          legL: lim.legL,
+          legR: lim.legR,
+          armL: lim.armL,
+          armR: lim.armR,
           hd: rand(0, 6.28),
           phase: rand(0, 6.28),
           speed: rand(1.1, 2.1),
@@ -6438,10 +6618,12 @@
           p.g.rotation.y = p.hd;
           if (Math.random() < 0.006) p.hd += rand(-1.1, 1.1);
           p.phase += dt * 6 * (p.speed / 1.6);
-          const sw = Math.sin(p.phase) * 0.5;
-          p.lL.rotation.x = sw;
-          p.rL.rotation.x = -sw;
-          p.g.position.y = Math.abs(Math.sin(p.phase)) * 0.06;
+          const sw = Math.sin(p.phase) * 0.55;
+          p.legL.rotation.x = sw;
+          p.legR.rotation.x = -sw;
+          p.armL.rotation.x = -sw * 0.8;
+          p.armR.rotation.x = sw * 0.8;
+          p.g.position.y = Math.abs(Math.sin(p.phase)) * 0.05;
           p.g.visible = Math.abs(dx) < BUBBLE && Math.abs(dz) < BUBBLE;
         }
       }
@@ -6743,19 +6925,11 @@
       }
       function iPerson(x, z, rot) {
         const g = new THREE.Group();
-        const c = [0x334455, 0x663333, 0x335544, 0x554433, 0x445566, 0x772d4a][
-          Math.floor(Math.random() * 6)
-        ];
-        const b = new THREE.Mesh(boxGeo, fmat(c));
-        b.scale.set(0.66, 1.0, 0.4);
-        b.position.y = 1.15;
-        g.add(b);
-        const h = new THREE.Mesh(
-          new THREE.SphereGeometry(0.27, 8, 6),
-          fmat(0xd8a878),
-        );
-        h.position.y = 1.82;
-        g.add(h);
+        const lim = buildHuman(g);
+        lim.armL.rotation.x = 0.12;
+        lim.armR.rotation.x = -0.12;
+        lim.legL.rotation.x = 0.06;
+        lim.legR.rotation.x = -0.06; // relaxed standing pose
         g.position.set(x, 0, z);
         g.rotation.y = rot || 0;
         interiorWorld.add(g);
@@ -8586,6 +8760,8 @@
         subStations = [],
         subPauseT = 0,
         subNear = -1;
+      const SUB_Y = -15,
+        SUBO = { x: 6900, z: 6000 };
       function buildSubway() {
         subStations = [
           { n: "Spawn", x: 0, z: 26 },
@@ -8594,37 +8770,77 @@
           { n: "Central Park", x: CPARK.x - 64, z: CPARK.z },
           { n: "Ferry", x: FERRY.x + 16, z: FERRY.z },
         ];
-        const pts = subStations.map((s) => V(s.x, 1.2, s.z));
+        const pts = subStations.map((s) => V(s.x, SUB_Y, s.z));
         subCurve = new THREE.CatmullRomCurve3(pts, true, "catmullrom", 0.3);
-        const tube = new THREE.Mesh(
-          new THREE.TubeGeometry(subCurve, 320, 0.32, 5, true),
+        const tunnel = new THREE.Mesh(
+          new THREE.TubeGeometry(subCurve, 300, 5, 10, true),
+          new THREE.MeshStandardMaterial({
+            color: 0x14161c,
+            side: THREE.BackSide,
+            roughness: 1,
+            metalness: 0,
+          }),
+        );
+        tunnel.matrixAutoUpdate = false;
+        tunnel.updateMatrix();
+        exploreWorld.add(tunnel);
+        const rail = new THREE.Mesh(
+          new THREE.TubeGeometry(subCurve, 300, 0.34, 5, true),
           new THREE.MeshStandardMaterial({
             color: 0x565b68,
             metalness: 0.6,
             roughness: 0.4,
           }),
         );
-        tube.matrixAutoUpdate = false;
-        tube.updateMatrix();
-        exploreWorld.add(tube);
+        rail.matrixAutoUpdate = false;
+        rail.updateMatrix();
+        exploreWorld.add(rail);
+        for (let k = 0; k < 40; k++) {
+          const pt = subCurve.getPointAt(k / 40);
+          const L = new THREE.Mesh(
+            boxGeo,
+            new THREE.MeshBasicMaterial({ color: 0xffe6a0 }),
+          );
+          L.scale.set(0.3, 0.3, 0.3);
+          L.position.set(pt.x, pt.y + 3.6, pt.z);
+          L.matrixAutoUpdate = false;
+          L.updateMatrix();
+          exploreWorld.add(L);
+        }
         subStations.forEach((s, i) => {
-          exAdd(11, 0.9, 7, fmat(0x3a3f4a), s.x, 0.45, s.z);
-          exAdd(12, 0.2, 8, fmat(0x22252c), s.x, 0.06, s.z);
+          exAdd(7, 0.3, 7, fmat(0x2a2e34), s.x, 0.16, s.z);
+          exAdd(0.4, 3, 6, fmat(0x3a4048), s.x - 3, 1.5, s.z);
+          exAdd(0.4, 3, 6, fmat(0x3a4048), s.x + 3, 1.5, s.z);
+          exAdd(6, 3, 0.4, fmat(0x3a4048), s.x, 1.5, s.z + 3);
+          exAdd(7, 0.4, 7, fmat(0x22252c), s.x, 3.1, s.z);
+          for (let k = 0; k < 5; k++)
+            exAdd(
+              4.5,
+              0.4,
+              0.8,
+              fmat(0x4a505a),
+              s.x,
+              0.3 - k * 0.18,
+              s.z - 1.5 - k * 0.7,
+            );
+          exAdd(4.6, 2, 0.5, fmat(0x05070c), s.x, 1, s.z - 5);
           exAdd(
-            9,
-            3,
+            6,
+            1,
             0.3,
             signMat("\ud83d\ude87 " + s.n, "#bfe3ff"),
             s.x,
-            2.5,
-            s.z - 3.4,
+            3.9,
+            s.z - 3.2,
           );
+          exAdd(0.15, 1, 4, nycMetal, s.x - 2.2, 0.9, s.z - 2.5);
+          exAdd(0.15, 1, 4, nycMetal, s.x + 2.2, 0.9, s.z - 2.5);
           exInteractables.push({
             x: s.x,
-            z: s.z,
-            r: 4.2,
-            label: "board the subway \ud83d\ude87",
-            action: () => boardSubway(i),
+            z: s.z - 2,
+            r: 3.6,
+            label: "go down into " + s.n + " subway station \ud83d\ude87",
+            action: () => enterStation(i),
           });
         });
         subCar = new THREE.Group();
@@ -8637,11 +8853,11 @@
           }),
         );
         b.scale.set(3.2, 2.8, 9);
-        b.position.y = 2.4;
+        b.position.y = 1.6;
         subCar.add(b);
         const stripe = new THREE.Mesh(boxGeo, fmat(0xffd24a));
         stripe.scale.set(3.3, 0.5, 9.1);
-        stripe.position.y = 2.9;
+        stripe.position.y = 2.1;
         subCar.add(stripe);
         for (let z = -3; z <= 3; z += 1.6) {
           for (const sx of [-1.62, 1.62]) {
@@ -8650,12 +8866,109 @@
               new THREE.MeshBasicMaterial({ color: 0x9fe0ff }),
             );
             w.scale.set(0.1, 0.9, 1.0);
-            w.position.set(sx, 2.6, z);
+            w.position.set(sx, 1.8, z);
             subCar.add(w);
           }
         }
         subCar.visible = false;
         exploreWorld.add(subCar);
+      }
+      function buildSubwayStation(i, arrive) {
+        const X = SUBO.x,
+          Z = SUBO.z,
+          s = subStations[i],
+          W = 17,
+          D = 32,
+          wc = fmat(0x3a4048),
+          H = 11;
+        iFloor(X, Z, W, D, 0, fmat(0x6a7078));
+        iAdd(W, 0.3, D, fmat(0x1a1d22), X, H, Z);
+        iWall(X - W / 2, Z, 0.3, D, H, wc);
+        iWall(X + W / 2, Z, 0.3, D, H, wc);
+        iWall(X, Z + D / 2, W, 0.3, H, wc);
+        iWall(X, Z - D / 2, W, 0.3, H, wc);
+        iAdd(
+          W - 1,
+          1.4,
+          0.1,
+          new THREE.MeshStandardMaterial({
+            color: 0xdfeaf2,
+            emissive: 0x223344,
+            emissiveIntensity: 0.12,
+          }),
+          X,
+          2.4,
+          Z + D / 2 - 0.35,
+        );
+        iSign(
+          X,
+          Z + D / 2 - 0.45,
+          s.n.toUpperCase() + " STATION",
+          "#bfe3ff",
+          4.2,
+          13,
+        );
+        iAdd(3.4, 0.5, D - 1, fmat(0x22262c), X - W / 2 + 2.0, -0.25, Z);
+        iAdd(0.2, 0.4, D - 1, nycMetal, X - W / 2 + 1.3, 0.0, Z);
+        iAdd(0.2, 0.4, D - 1, nycMetal, X - W / 2 + 2.7, 0.0, Z);
+        iAdd(
+          3.2,
+          4.5,
+          0.6,
+          fmat(0x05070c),
+          X - W / 2 + 2.0,
+          2,
+          Z - D / 2 + 0.4,
+        );
+        iAdd(
+          3.2,
+          4.5,
+          0.6,
+          fmat(0x05070c),
+          X - W / 2 + 2.0,
+          2,
+          Z + D / 2 - 0.4,
+        );
+        for (let b = -1; b <= 1; b++) {
+          iAdd(3, 0.6, 1, fmat(0x5a4a3a), X + 3, 0.3, Z + b * 8);
+          iAdd(0.6, H, 0.6, fmat(0x50555c), X + 0.8, H / 2, Z + b * 9);
+        }
+        iStair(X + W / 2 - 4, Z + 8, 5, 12, 0, 9, "z", false);
+        iFloor(X + W / 2 - 4, Z + 14.4, 6, 4, 9, fmat(0x6a7078));
+        iSign(X + W / 2 - 4, Z + 14.4, "TO STREET \u2191", "#ffd27a", 10.6, 4);
+        for (let t = 0; t < 4; t++)
+          iPerson(X + rand(-4, 4), Z + rand(-9, 9), rand(0, 6.28));
+        interiorPortals.push({
+          x: X - W / 2 + 3.6,
+          z: Z,
+          r: 2.8,
+          label: "board the train \ud83d\ude87",
+          action: () => boardFromStation(i),
+        });
+        interiorPortals.push({
+          x: X + W / 2 - 4,
+          z: Z + 14.4,
+          r: 2.6,
+          label: "exit to street",
+          action: () => exitInterior(),
+        });
+        return arrive
+          ? { x: X - W / 2 + 4.6, z: Z, y: 0, yaw: -Math.PI / 2 }
+          : { x: X + W / 2 - 4, z: Z + 14.4, y: 9, yaw: 0 };
+      }
+      function enterStation(i) {
+        const s = subStations[i];
+        enterInterior(() => buildSubwayStation(i, false), {
+          mode: "explore",
+          x: s.x,
+          z: s.z - 2,
+          yaw: Math.PI,
+          exitLabel: "exit to street",
+        });
+      }
+      function boardFromStation(i) {
+        exitInterior();
+        boardSubway(i);
       }
       function boardSubway(i) {
         if (subRiding || driving || flying || boating) return;
@@ -8664,7 +8977,7 @@
         subPauseT = 0;
         subCar.visible = true;
         showToast(
-          "\ud83d\ude87 Riding \u2014 press E or G to hop off",
+          "\ud83d\ude87 Riding the tunnel \u2014 E or G to hop off",
           "#bfe3ff",
         );
         updateExHud();
@@ -8687,14 +9000,18 @@
           }
         }
         const s = subStations[best];
-        player.x = s.x;
-        player.z = s.z + 5;
-        player.y = 0;
-        exVY = 0;
-        exOnGround = true;
-        player.yaw = Math.PI;
         sfx("land");
-        showToast("Hopped off at " + s.n, "#bfe3ff");
+        showToast(
+          "Arriving at " + s.n + " \u2014 head up to the street",
+          "#bfe3ff",
+        );
+        enterInterior(() => buildSubwayStation(best, true), {
+          mode: "explore",
+          x: s.x,
+          z: s.z - 2,
+          yaw: Math.PI,
+          exitLabel: "exit to street",
+        });
         updateExHud();
       }
       function updateSubway(dt) {
@@ -8702,11 +9019,11 @@
         if (subPauseT > 0) {
           subPauseT -= dt;
         } else {
-          subT = (subT + dt * 0.028) % 1;
+          subT = (subT + dt * 0.1) % 1;
           for (let i = 0; i < n; i++) {
             const sp = i / n;
             const d = Math.abs(((subT - sp + 1.5) % 1) - 0.5);
-            if (d < 0.01) {
+            if (d < 0.013) {
               subPauseT = 1.5;
               subNear = i;
               sfx("click");
@@ -8724,8 +9041,8 @@
         subCar.lookAt(p.x + tan.x, p.y + tan.y, p.z + tan.z);
         player.x = p.x;
         player.z = p.z;
-        camera.position.set(p.x - tan.x * 9, p.y + 5.5, p.z - tan.z * 9);
-        camera.lookAt(p.x + tan.x * 8, p.y + 2, p.z + tan.z * 8);
+        camera.position.set(p.x - tan.x * 8, p.y + 3.5, p.z - tan.z * 8);
+        camera.lookAt(p.x + tan.x * 8, p.y + 1, p.z + tan.z * 8);
       }
 
       // ============================================================
@@ -9289,7 +9606,7 @@
             40 + el * 150,
             player.z + Math.sin(timeOfDay * 6.28) * 120,
           );
-          exSun.intensity = 0.15 + day * 1.15;
+          exSun.intensity = 0.12 + day * 0.98;
           exSun.color.setHex(lerpHex(sunHexDusk, sunHexDay, day));
           if (exSun.target) {
             exSun.target.position.set(player.x, 0, player.z);
@@ -9297,7 +9614,7 @@
           }
         }
         if (exHemi) {
-          exHemi.intensity = 0.28 + day * 0.5;
+          exHemi.intensity = 0.24 + day * 0.42;
           exHemi.color.setHex(lerpHex(0x33406a, 0xfff0d6, day));
           exHemi.groundColor && exHemi.groundColor.setHex(0x2a2622);
         }
@@ -9502,6 +9819,10 @@
             { n: "Off", v: false },
             { n: "On", v: true },
           ]) +
+          row("Bloom glow", "bloom", [
+            { n: "Off", v: 0 },
+            { n: "On", v: 1 },
+          ]) +
           row("Draw distance", "drawDist", [
             { n: "Low", v: 0 },
             { n: "Med", v: 1 },
@@ -9685,6 +10006,10 @@
           '<div id="photoflash" style="position:fixed;inset:0;z-index:110;background:#fff;opacity:0;pointer-events:none"></div>',
         );
         document.body.appendChild(flash);
+        const vig = mk(
+          '<div id="vignette" style="position:fixed;inset:0;z-index:8;pointer-events:none;background:radial-gradient(ellipse at center, rgba(0,0,0,0) 52%, rgba(0,0,0,0.22) 88%, rgba(0,0,0,0.42) 100%)"></div>',
+        );
+        document.body.appendChild(vig);
         // shop buy menu
         const shopm = mk(
           '<div id="shopmenu" style="position:fixed;inset:0;z-index:120;display:none;align-items:center;justify-content:center;background:rgba(4,6,14,0.72)"><div style="background:#141a2c;border:1px solid #3a4a70;border-radius:16px;padding:20px 22px;width:min(380px,86vw);color:#eef;font:14px system-ui"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><b id="sm-title" style="font-size:18px">Shop</b><button id="sm-close" style="background:#2a3350;border:none;color:#fff;border-radius:8px;padding:6px 12px;cursor:pointer">Done</button></div><div id="sm-body"></div></div></div>',
@@ -9724,6 +10049,8 @@
       (async function boot() {
         await loadMeta();
         setupHudExtras();
+        setupBloom();
+        setupEnv();
         applyArmColor();
         applyWorld(META.world);
         fitAll(); // size renderer, FOV, and controls to this screen
