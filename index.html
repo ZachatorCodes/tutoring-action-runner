@@ -835,6 +835,17 @@
       >
         🗽 Explore NYC — free roam
       </button>
+      <button
+        class="btn"
+        id="explore-bos-btn"
+        style="
+          margin-top: 8px;
+          background: linear-gradient(135deg, #d9784a, #8a3a2a);
+          border-color: #d9784a;
+        "
+      >
+        🧱 Explore Boston — free roam
+      </button>
       <div class="controls">
         <span><b>WASD</b> move</span>
         <span><b>MOUSE</b> look</span>
@@ -2044,6 +2055,48 @@
             scenicBot: -60,
           },
         },
+
+        {
+          id: "boston",
+          name: "Boston Rooftops",
+          chip: "#d9784a",
+          bg: 0x3a2620,
+          fog: [0xd98a52, 32, 160],
+          hemi: [0xffb877, 0x3a2822, 1.0],
+          key: [0xffd9a0, 1.15],
+          rim: [0xff7a4a],
+          grid: [0x5a3a30, 0x32211c],
+          star: 0xffd9a0,
+          floor: null,
+          mat: {
+            plat: [0x7d4a38, 0x2a1712],
+            start: [0x8a5442, 0x341c14],
+            tier: [0x6a4030, 0x241410],
+            bounce: [0xffd23a, 0xffae10],
+            ramp: [0x7d4a38, 0x2a1712],
+            pillar: [0x5a2f26, 0x7a3a30],
+            wallrun: [0x4a2a22, 0x7a4030],
+            edge: 0xffbf8a,
+            shard: [0xffe04a, 0xffc21a],
+          },
+          feel: { gravity: 26, speedMul: 1.0, jumpMul: 1.0, friction: 0.78 },
+          gen: {
+            wMul: 1.02,
+            depMul: 1.0,
+            gapMul: 1.06,
+            latMul: 0.92,
+            vertMul: 0.45,
+            tierChance: 0.45,
+            wallChance: 0.22,
+            scenicChance: 0.5,
+            bounceBias: 0,
+            scenicWMin: 3,
+            scenicWMax: 6,
+            scenicTopMin: 2,
+            scenicTopMax: 17,
+            scenicBot: -80,
+          },
+        },
       ];
       function worldById(id) {
         return WORLDS.find((w) => w.id === id) || WORLDS[0];
@@ -2102,6 +2155,7 @@
         META.world = id;
         NYC_MODE = id === "nyc";
         ANTARCTICA_MODE = id === "antarctica";
+        BOSTON_MODE = id === "boston";
         rebuildWorldProps();
       }
 
@@ -2109,6 +2163,10 @@
       //  NYC WORLD — bespoke sunset scene (sky, skyline, landmarks)
       // ============================================================
       let NYC_MODE = false;
+      let BOSTON_MODE = false;
+      function cityMode() {
+        return NYC_MODE || BOSTON_MODE;
+      } // solid buildings-as-platforms
       let ANTARCTICA_MODE = false,
         snowSys = null;
       const antCritters = []; // {g,kind,hx,hz,x,z,hd,t,speed,wr,baseY}
@@ -2219,12 +2277,58 @@
             }),
           });
         }
+      // ---- Boston: warm red-brick facades ----
+      function makeBrickWinTex(rows, cols) {
+        const c = document.createElement("canvas");
+        c.width = cols * 16;
+        c.height = rows * 16;
+        const g = c.getContext("2d");
+        g.fillStyle = "#7d3a2c";
+        g.fillRect(0, 0, c.width, c.height); // brick red
+        g.fillStyle = "rgba(60,26,20,0.5)";
+        for (let r = 0; r < rows * 3; r++)
+          g.fillRect(0, Math.round((r * c.height) / (rows * 3)), c.width, 1); // mortar courses
+        for (let r = 0; r < rows; r++)
+          for (let k = 0; k < cols; k++) {
+            const on = Math.random() < 0.5,
+              warm = Math.random() < 0.78;
+            g.fillStyle = on ? (warm ? "#ffd68a" : "#cfe6ff") : "#2a1218";
+            g.fillRect(k * 16 + 3, r * 16 + 2, 10, 12);
+          }
+        const t = new THREE.CanvasTexture(c);
+        t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+        return t;
+      }
+      const brickWinMats = [];
+      for (const cols of [2, 3, 4])
+        for (const rows of [14, 20, 26]) {
+          const tex = makeBrickWinTex(rows, cols);
+          brickWinMats.push({
+            cols,
+            rows,
+            mat: new THREE.MeshStandardMaterial({
+              color: 0xffffff,
+              map: tex,
+              emissiveMap: tex,
+              emissive: 0xffffff,
+              emissiveIntensity: 0.4,
+              roughness: 0.9,
+            }),
+          });
+        }
+      const bostonRoofMat = new THREE.MeshStandardMaterial({
+        color: 0x5a4038,
+        roughness: 0.95,
+        emissive: 0x241612,
+        emissiveIntensity: 0.25,
+      });
       function pickWinMat(w, h) {
+        const set = BOSTON_MODE || exCity === "boston" ? brickWinMats : winMats;
         const cols = clamp(Math.round(w / 3), 2, 4),
           rows = clamp(Math.round(h / 3), 14, 26);
-        let best = winMats[0],
+        let best = set[0],
           bd = 1e9;
-        for (const wm of winMats) {
+        for (const wm of set) {
           const dd = Math.abs(wm.cols - cols) + Math.abs(wm.rows - rows) * 0.15;
           if (dd < bd) {
             bd = dd;
@@ -2236,14 +2340,8 @@
       function buildingMeshFor(x, z, w, d, roofTop) {
         const bh = roofTop - STREET_Y;
         const win = pickWinMat(w, bh);
-        const mesh = new THREE.Mesh(boxGeo, [
-          win,
-          win,
-          roofMat,
-          botMat,
-          win,
-          win,
-        ]);
+        const rm = BOSTON_MODE ? bostonRoofMat : roofMat;
+        const mesh = new THREE.Mesh(boxGeo, [win, win, rm, botMat, win, win]);
         mesh.scale.set(w, bh, d);
         mesh.position.set(x, STREET_Y + bh / 2, z);
         return mesh;
@@ -2828,6 +2926,387 @@
         }
         worldProps.add(grp);
       }
+      // ---- Boston skyline (brick city + Boston landmarks) ----
+      function bxSil(w, h, d, x, y, z, mat) {
+        const m = new THREE.Mesh(boxGeo, mat || nycSil);
+        m.scale.set(w, h, d);
+        m.position.set(x, y, z);
+        worldProps.add(m);
+        return m;
+      }
+      function buildBostonPru(a, R) {
+        const x = Math.sin(a) * R,
+          z = Math.cos(a) * R;
+        bxSil(15, 58, 15, x, -18 + 29, z);
+        bxSil(2.4, 12, 2.4, x, -18 + 64, z);
+      }
+      function buildBostonHancock(a, R) {
+        const x = Math.sin(a) * R,
+          z = Math.cos(a) * R;
+        const m = new THREE.Mesh(
+          boxGeo,
+          new THREE.MeshBasicMaterial({ color: 0x33455f, fog: false }),
+        );
+        m.scale.set(6, 64, 20);
+        m.position.set(x, -18 + 32, z);
+        m.rotation.y = a + 0.35;
+        worldProps.add(m);
+      }
+      function buildBostonStateHouse(a, R) {
+        const x = Math.sin(a) * R,
+          z = Math.cos(a) * R;
+        bxSil(18, 14, 13, x, -18 + 7, z);
+        bxSil(11, 5, 11, x, -18 + 16, z);
+        const dome = new THREE.Mesh(
+          new THREE.SphereGeometry(4.2, 16, 12),
+          new THREE.MeshStandardMaterial({
+            color: 0xffd54a,
+            metalness: 0.9,
+            roughness: 0.25,
+            emissive: 0x7a5810,
+            emissiveIntensity: 0.6,
+            fog: false,
+          }),
+        );
+        dome.scale.y = 1.15;
+        dome.position.set(x, -18 + 20, z);
+        worldProps.add(dome);
+        const cup = new THREE.Mesh(
+          cylGeo,
+          new THREE.MeshBasicMaterial({ color: 0xffe36a, fog: false }),
+        );
+        cup.scale.set(0.5, 2.4, 0.5);
+        cup.position.set(x, -18 + 25, z);
+        worldProps.add(cup);
+      }
+      function buildBostonCustomHouse(a, R) {
+        const x = Math.sin(a) * R,
+          z = Math.cos(a) * R;
+        bxSil(10, 18, 10, x, -18 + 9, z);
+        bxSil(7.5, 24, 7.5, x, -18 + 30, z);
+        const clock = new THREE.Mesh(
+          boxGeo,
+          new THREE.MeshBasicMaterial({ color: 0xeae0c2, fog: false }),
+        );
+        clock.scale.set(4.4, 4.4, 0.5);
+        clock.position.set(x, -18 + 40, z - 3.8);
+        worldProps.add(clock);
+        const top = new THREE.Mesh(coneGeo, nycSil);
+        top.scale.set(6.5, 7, 6.5);
+        top.position.set(x, -18 + 47, z);
+        worldProps.add(top);
+      }
+      function buildBostonZakim(a, R) {
+        const cx = Math.sin(a) * R,
+          cz = Math.cos(a) * R,
+          g = new THREE.Group();
+        g.position.set(cx, 0, cz);
+        g.rotation.y = -a;
+        const deckY = -8;
+        const deck = new THREE.Mesh(boxGeo, nycSil);
+        deck.scale.set(96, 1.5, 6);
+        deck.position.set(0, deckY, 0);
+        g.add(deck);
+        for (const tx of [-24, 24]) {
+          const pyl = new THREE.Mesh(boxGeo, nycSil);
+          pyl.scale.set(2.2, 26, 2.2);
+          pyl.position.set(tx, deckY + 13, 0);
+          g.add(pyl);
+          for (const s of [-1, 1]) {
+            const fork = new THREE.Mesh(boxGeo, nycSil);
+            fork.scale.set(1.5, 14, 1.5);
+            fork.position.set(tx + s * 2.4, deckY + 32, 0);
+            fork.rotation.z = s * 0.26;
+            g.add(fork);
+          }
+          for (let i = -4; i <= 4; i++) {
+            const dz = i * 5,
+              c = new THREE.Mesh(boxGeo, nycSil);
+            c.scale.set(0.3, Math.hypot(26, Math.abs(dz)), 0.3);
+            c.position.set(tx + dz * 0.5, deckY + 18, 0);
+            c.rotation.z = Math.atan2(dz, 26) * 0.7;
+            g.add(c);
+          }
+        }
+        worldProps.add(g);
+      }
+      function buildBostonFenway(a, R) {
+        const cx = Math.sin(a) * R,
+          cz = Math.cos(a) * R,
+          g = new THREE.Group();
+        g.position.set(cx, -18, cz);
+        g.rotation.y = -a;
+        for (let k = 0; k < 20; k++) {
+          const ang = (k / 20) * 6.2832,
+            rx = Math.cos(ang) * 19,
+            rz = Math.sin(ang) * 14,
+            st = new THREE.Mesh(boxGeo, nycSil);
+          st.scale.set(5.5, 6, 4);
+          st.position.set(rx, 3, rz);
+          st.rotation.y = ang;
+          g.add(st);
+        }
+        const gm = new THREE.Mesh(
+          boxGeo,
+          new THREE.MeshBasicMaterial({ color: 0x2f6a34, fog: false }),
+        );
+        gm.scale.set(28, 11, 1.6);
+        gm.position.set(0, 5.5, -14);
+        g.add(gm);
+        for (const lx of [-17, -6, 6, 17]) {
+          const p = new THREE.Mesh(boxGeo, nycSil);
+          p.scale.set(0.9, 17, 0.9);
+          p.position.set(lx, 8.5, 15);
+          g.add(p);
+          const bank = new THREE.Mesh(
+            boxGeo,
+            new THREE.MeshBasicMaterial({ color: 0xffffff, fog: false }),
+          );
+          bank.scale.set(4.5, 2, 1);
+          bank.position.set(lx, 17, 15);
+          g.add(bank);
+        }
+        worldProps.add(g);
+      }
+      function buildBostonTD(a, R) {
+        const x = Math.sin(a) * R,
+          z = Math.cos(a) * R;
+        bxSil(28, 16, 22, x, -18 + 8, z); // arena block
+        const roof = new THREE.Mesh(cylGeo, nycSil);
+        roof.rotation.z = Math.PI / 2;
+        roof.scale.set(9, 28, 22);
+        roof.position.set(x, -18 + 16, z);
+        worldProps.add(roof); // curved roof
+        const sign = new THREE.Mesh(
+          boxGeo,
+          new THREE.MeshBasicMaterial({ color: 0xffe36a, fog: false }),
+        );
+        sign.scale.set(11, 3, 0.5);
+        sign.position.set(x, -18 + 13, z - 11.2);
+        worldProps.add(sign); // lit "TD GARDEN" band
+        const banner = new THREE.Mesh(
+          boxGeo,
+          new THREE.MeshBasicMaterial({ color: 0x1a7a44, fog: false }),
+        );
+        banner.scale.set(2, 5, 0.3);
+        banner.position.set(x - 6, -18 + 22, z - 11);
+        worldProps.add(banner); // Celtics green banner
+      }
+      function buildBostonSteeple(x, z, s) {
+        s = s || 1;
+        const wm = new THREE.MeshBasicMaterial({ color: 0xe8e4d6, fog: false });
+        const body = new THREE.Mesh(boxGeo, wm);
+        body.scale.set(5 * s, 7 * s, 5 * s);
+        body.position.set(x, -18 + 3.5 * s, z);
+        worldProps.add(body);
+        const tower = new THREE.Mesh(boxGeo, wm);
+        tower.scale.set(2.4 * s, 10 * s, 2.4 * s);
+        tower.position.set(x, -18 + 9 * s, z);
+        worldProps.add(tower);
+        const spire = new THREE.Mesh(coneGeo, wm);
+        spire.scale.set(2.6 * s, 7 * s, 2.6 * s);
+        spire.position.set(x, -18 + 17 * s, z);
+        worldProps.add(spire);
+      }
+      function buildBostonFaneuil(a, R) {
+        const x = Math.sin(a) * R,
+          z = Math.cos(a) * R;
+        const brick = new THREE.MeshBasicMaterial({
+          color: 0x8a4a38,
+          fog: false,
+        });
+        const hall = new THREE.Mesh(boxGeo, brick);
+        hall.scale.set(22, 12, 13);
+        hall.position.set(x, -18 + 6, z);
+        worldProps.add(hall);
+        const cup = new THREE.Mesh(
+          boxGeo,
+          new THREE.MeshBasicMaterial({ color: 0xd8d0bc, fog: false }),
+        );
+        cup.scale.set(3, 4, 3);
+        cup.position.set(x, -18 + 14, z);
+        worldProps.add(cup);
+        const dome = new THREE.Mesh(
+          new THREE.SphereGeometry(1.8, 12, 10),
+          new THREE.MeshBasicMaterial({ color: 0xc0a850, fog: false }),
+        );
+        dome.position.set(x, -18 + 17, z);
+        worldProps.add(dome);
+      }
+      function buildBostonOldNorth(a, R) {
+        const x = Math.sin(a) * R,
+          z = Math.cos(a) * R;
+        buildBostonSteeple(x, z, 1.6);
+      }
+      function buildBostonBunkerHill(a, R) {
+        const x = Math.sin(a) * R,
+          z = Math.cos(a) * R;
+        const g = new THREE.MeshBasicMaterial({ color: 0x9a9488, fog: false });
+        for (let k = 0; k < 5; k++) {
+          const s = 1 - k * 0.13,
+            m = new THREE.Mesh(boxGeo, g);
+          m.scale.set(4.4 * s, 10, 4.4 * s);
+          m.position.set(x, -18 + 5 + k * 10, z);
+          worldProps.add(m);
+        }
+        const cap = new THREE.Mesh(coneGeo, g);
+        cap.scale.set(3, 6, 3);
+        cap.position.set(x, -18 + 56, z);
+        worldProps.add(cap);
+      }
+      function buildBostonUSS(a, R) {
+        const x = Math.sin(a) * R,
+          z = Math.cos(a) * R,
+          g = new THREE.Group();
+        g.position.set(x, -18, z);
+        g.rotation.y = -a;
+        const hull = new THREE.Mesh(
+          boxGeo,
+          new THREE.MeshBasicMaterial({ color: 0x2a1c12, fog: false }),
+        );
+        hull.scale.set(22, 5, 6);
+        hull.position.y = 3;
+        g.add(hull);
+        for (const mx of [-6, 0, 6]) {
+          const mast = new THREE.Mesh(
+            cylGeo,
+            new THREE.MeshBasicMaterial({ color: 0x3a2a1a, fog: false }),
+          );
+          mast.scale.set(0.4, 20, 0.4);
+          mast.position.set(mx, 14, 0);
+          g.add(mast);
+          for (const my of [10, 15, 19]) {
+            const yard = new THREE.Mesh(
+              boxGeo,
+              new THREE.MeshBasicMaterial({ color: 0x3a2a1a, fog: false }),
+            );
+            yard.scale.set(0.3, 0.3, 9 - (my - 10) * 0.4);
+            yard.position.set(mx, my, 0);
+            g.add(yard);
+            const sail = new THREE.Mesh(
+              boxGeo,
+              new THREE.MeshBasicMaterial({ color: 0xe8e2d2, fog: false }),
+            );
+            sail.scale.set(0.1, 3.5, 8 - (my - 10) * 0.4);
+            sail.position.set(mx, my - 2, 0);
+            g.add(sail);
+          }
+        }
+        worldProps.add(g);
+      }
+      function buildBostonBPL(a, R) {
+        const x = Math.sin(a) * R,
+          z = Math.cos(a) * R;
+        const st = new THREE.MeshBasicMaterial({ color: 0x9a8a6a, fog: false });
+        const b = new THREE.Mesh(boxGeo, st);
+        b.scale.set(30, 16, 16);
+        b.position.set(x, -18 + 8, z);
+        worldProps.add(b);
+        for (let k = -3; k <= 3; k++) {
+          const arch = new THREE.Mesh(
+            boxGeo,
+            new THREE.MeshBasicMaterial({ color: 0x2a2620, fog: false }),
+          );
+          arch.scale.set(2.4, 7, 0.4);
+          arch.position.set(x + k * 3.6, -18 + 9, z - 8.1);
+          worldProps.add(arch);
+        }
+      }
+      function buildBostonCitgo(a, R) {
+        const x = Math.sin(a) * R,
+          z = Math.cos(a) * R;
+        bxSil(14, 34, 14, x, -18 + 17, z); // brick building
+        const panel = new THREE.Mesh(
+          boxGeo,
+          new THREE.MeshBasicMaterial({ color: 0xffffff, fog: false }),
+        );
+        panel.scale.set(11, 11, 0.5);
+        panel.position.set(x, -18 + 30, z - 7.2);
+        worldProps.add(panel);
+        const tri = new THREE.Mesh(
+          coneGeo,
+          new THREE.MeshBasicMaterial({
+            color: 0xe33a2e,
+            emissive: 0xe33a2e,
+            fog: false,
+          }),
+        );
+        tri.scale.set(7, 6, 0.6);
+        tri.rotation.x = Math.PI / 2;
+        tri.position.set(x, -18 + 30, z - 7.5);
+        worldProps.add(tri);
+      } // red triangle
+      function buildBostonSky() {
+        const domeGeo = new THREE.SphereGeometry(460, 32, 20);
+        const pos = domeGeo.attributes.position,
+          col = [];
+        for (let i = 0; i < pos.count; i++) {
+          const c = nycGradColor(pos.getY(i) / 460);
+          col.push(c.r, c.g, c.b);
+        }
+        domeGeo.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
+        const dome = new THREE.Mesh(
+          domeGeo,
+          new THREE.MeshBasicMaterial({
+            vertexColors: true,
+            side: THREE.BackSide,
+            fog: false,
+            depthWrite: false,
+          }),
+        );
+        worldProps.add(dome);
+        const sunPos = new THREE.Vector3(-150, 34, 430);
+        const sun = new THREE.Mesh(
+          new THREE.SphereGeometry(28, 24, 24),
+          new THREE.MeshBasicMaterial({ color: 0xfff0c0, fog: false }),
+        );
+        sun.position.copy(sunPos);
+        worldProps.add(sun);
+        const halo = new THREE.Mesh(
+          new THREE.SphereGeometry(70, 24, 24),
+          new THREE.MeshBasicMaterial({
+            color: 0xffb060,
+            fog: false,
+            transparent: true,
+            opacity: 0.3,
+            depthWrite: false,
+          }),
+        );
+        halo.position.copy(sunPos);
+        worldProps.add(halo);
+        key.position.copy(sunPos);
+        const R = 285,
+          N = 64;
+        for (let i = 0; i < N; i++)
+          buildDistantTower(
+            (i / N) * Math.PI * 2 + rand(-0.02, 0.02),
+            R,
+            10,
+            40,
+          ); // lower brick skyline
+        buildBostonPru(0.5, R - 12);
+        buildBostonHancock(0.9, R - 14);
+        buildBostonCustomHouse(1.7, R - 28);
+        buildBostonStateHouse(2.5, R - 42);
+        buildBostonZakim(3.75, R - 52);
+        buildBostonTD(4.4, R - 44);
+        buildBostonFenway(5.1, R - 46);
+        buildBostonFaneuil(1.25, R - 34);
+        buildBostonOldNorth(2.05, R - 24);
+        buildBostonBunkerHill(3.2, R - 30);
+        buildBostonUSS(4.05, R - 38);
+        buildBostonBPL(5.7, R - 40);
+        buildBostonCitgo(0.15, R - 20);
+        for (let i = 0; i < 9; i++) {
+          const ang = rand(0, 6.2832),
+            r = rand(120, 225);
+          buildBostonSteeple(
+            Math.sin(ang) * r,
+            Math.cos(ang) * r,
+            rand(0.7, 1.2),
+          );
+        } // church steeples dotting the city
+      }
       function buildNYCSky() {
         const domeGeo = new THREE.SphereGeometry(460, 32, 20);
         const pos = domeGeo.attributes.position,
@@ -3157,12 +3636,15 @@
         if (NYC_MODE) {
           buildNYCSky();
           buildNYCStreets();
+        } else if (BOSTON_MODE) {
+          buildBostonSky();
+          buildNYCStreets();
         } else if (ANTARCTICA_MODE) {
           buildAntarcticaSky();
         }
       }
       function worldTick(dt) {
-        if (NYC_MODE) {
+        if (NYC_MODE || BOSTON_MODE) {
           worldProps.position.set(camera.position.x, 0, camera.position.z);
           if (cityTex)
             cityTex.offset.set(
@@ -3232,7 +3714,7 @@
         const top = y + h / 2;
         let mesh,
           edges = null;
-        if (NYC_MODE) {
+        if (cityMode()) {
           // a solid building rising from the street; its roof is the landing surface
           mesh = buildingMeshFor(x, z, w, d, top);
           if (bounce) {
@@ -3297,7 +3779,7 @@
             p.shardObj = s;
           }
         }
-        if (NYC_MODE && !start) nycDressRoof(p); // rooftop props or an enterable furnished room
+        if (cityMode() && !start) nycDressRoof(p); // rooftop props or an enterable furnished room
         if (ANTARCTICA_MODE) dressAntarcticaPeak(p);
         if (mesh) {
           mesh.castShadow = true;
@@ -3355,19 +3837,19 @@
           depth = rand(12, 18);
         const x = px + side * rand(2.6, 3.3);
         const yTop = 44,
-          yBot = NYC_MODE ? STREET_Y : -34,
+          yBot = cityMode() ? STREET_Y : -34,
           h = yTop - yBot,
           cy = (yTop + yBot) / 2;
         const z = pz + depth * 0.35;
         const mesh = new THREE.Mesh(
           boxGeo,
-          NYC_MODE ? pickWinMat(w, h) : wallRunMat,
+          cityMode() ? pickWinMat(w, h) : wallRunMat,
         );
         mesh.scale.set(w, h, depth);
         mesh.position.set(x, cy, z);
         scene.add(mesh);
         let edges = null;
-        if (!NYC_MODE) {
+        if (!cityMode()) {
           edges = new THREE.LineSegments(
             new THREE.EdgesGeometry(boxGeo),
             edgeMat,
@@ -3394,12 +3876,12 @@
         const w = rand(g.scenicWMin, g.scenicWMax),
           depth = rand(g.scenicWMin, g.scenicWMax);
         const yTop = rand(g.scenicTopMin, g.scenicTopMax),
-          yBot = NYC_MODE ? STREET_Y : g.scenicBot,
+          yBot = cityMode() ? STREET_Y : g.scenicBot,
           h = yTop - yBot,
           cy = (yTop + yBot) / 2;
         let mesh,
           edges = null;
-        if (NYC_MODE) {
+        if (cityMode()) {
           const win = pickWinMat(w, h);
           mesh = new THREE.Mesh(boxGeo, [win, win, roofMat, botMat, win, win]);
           mesh.scale.set(w, h, depth);
@@ -4473,9 +4955,16 @@
         show(elPaused, false);
         requestLock();
       });
+      document.getElementById("explore-btn").addEventListener("click", () => {
+        exCity = "nyc";
+        enterExplore();
+      });
       document
-        .getElementById("explore-btn")
-        .addEventListener("click", enterExplore);
+        .getElementById("explore-bos-btn")
+        .addEventListener("click", () => {
+          exCity = "boston";
+          enterExplore();
+        });
       document.getElementById("ex-exit").addEventListener("click", exitExplore);
       {
         const eu = document.getElementById("ex-use"),
@@ -4807,6 +5296,14 @@
         exReady = false,
         exPrevWorld = "void",
         exParent = null;
+      let exCity = "nyc"; // which Explore city: 'nyc' | 'boston'
+      const COMMON = { x: 120, z: 110 }; // Boston Common / Public Garden
+      const PRU = { x: -110, z: 70 },
+        HAN = { x: -134, z: 96 }; // Prudential + Hancock
+      const STATE = { x: 60, z: -46 }; // Massachusetts State House (golden dome)
+      const FENWAY = { x: -150, z: -72 }; // Fenway Park
+      const TDG = { x: 150, z: -34 }; // TD Garden (enterable arena)
+      const TDO = { x: 6900, z: 6900 }; // TD Garden interior (far origin)
       const exColliders = []; // {x,z,hw,hd}
       const exInteractables = []; // {x,z,r,label,action,done}
       const exCars2 = []; // street cars {mesh,axis,lane,pos,dir,speed,lo,hi}
@@ -5371,7 +5868,23 @@
         });
       }
       function inReserved(x, z) {
-        if (Math.abs(x) < 28 && Math.abs(z) < 30) return true; // spawn plaza
+        if (Math.abs(x) < 28 && Math.abs(z) < 30) return true; // spawn plaza (both cities)
+        if (exCity === "boston") {
+          if (z < -196) return true; // Charles River
+          if (Math.abs(x - COMMON.x) < 78 && Math.abs(z - COMMON.z) < 82)
+            return true; // Boston Common
+          if (Math.abs(x - PRU.x) < 22 && Math.abs(z - PRU.z) < 22) return true; // Prudential
+          if (Math.abs(x - HAN.x) < 20 && Math.abs(z - HAN.z) < 18) return true; // Hancock
+          if (Math.abs(x - STATE.x) < 22 && Math.abs(z - STATE.z) < 18)
+            return true; // State House
+          if (Math.abs(x - FENWAY.x) < 54 && Math.abs(z - FENWAY.z) < 50)
+            return true; // Fenway
+          if (Math.abs(x - TDG.x) < 30 && Math.abs(z - TDG.z) < 24) return true; // TD Garden
+          if (Math.abs(x - 34) < 9 && Math.abs(z + 24) < 9) return true; // coffee shop
+          if (Math.abs(x + 34) < 9 && Math.abs(z + 24) < 9) return true; // arcade
+          if (Math.abs(x - 36) < 9 && Math.abs(z - 26) < 9) return true; // toy store
+          return false;
+        }
         if (Math.abs(x - AM.x) < 80 && Math.abs(z - AM.z) < 98) return true; // amusement
         if (Math.abs(x - PARK.x) < 74 && Math.abs(z - PARK.z) < 60) return true; // sports park
         if (Math.abs(x - AIR.x) < 110 && Math.abs(z - AIR.z) < 110) return true; // airport
@@ -5910,91 +6423,98 @@
         exShop(-24, -30, 11, 10, 9, +1, "THE HAMILTON APTS", "home");
         exShop(24, -30, 11, 10, 9, -1, "PARKSIDE RESIDENCES", "home");
         exShop(-40, 16, 11, 10, 9, +1, "BRICK ROW HOMES", "home");
-        // ---- sports park + airport (always visible) ----
-        exPark(PARK.x, PARK.z);
-        buildAirport(AIR.x, AIR.z);
-        // ---- Empire State Building, standing in the city and enterable ----
-        const emp = makeEmpireState();
-        emp.scale.set(2.4, 2.4, 2.4);
-        emp.position.set(ES.x, 0, ES.z);
-        exploreWorld.add(emp);
-        addBlob(ES.x, ES.z, 20);
-        exInteractables.push({
-          x: ES.x,
-          z: ES.z - 24,
-          r: 8,
-          label: "enter the Empire State Building",
-          action: () => enterEmpire(),
-        });
-        for (let i = 0; i < 6; i++)
-          exPeople.push(
-            mkExPerson(ES.x + rand(-16, 16), ES.z - 20 + rand(-6, 6)),
+        // ---- NYC-only landmarks ----
+        if (exCity !== "boston") {
+          // ---- sports park + airport (always visible) ----
+          exPark(PARK.x, PARK.z);
+          buildAirport(AIR.x, AIR.z);
+          // ---- Empire State Building, standing in the city and enterable ----
+          const emp = makeEmpireState();
+          emp.scale.set(2.4, 2.4, 2.4);
+          emp.position.set(ES.x, 0, ES.z);
+          exploreWorld.add(emp);
+          addBlob(ES.x, ES.z, 20);
+          exInteractables.push({
+            x: ES.x,
+            z: ES.z - 24,
+            r: 8,
+            label: "enter the Empire State Building",
+            action: () => enterEmpire(),
+          });
+          for (let i = 0; i < 6; i++)
+            exPeople.push(
+              mkExPerson(ES.x + rand(-16, 16), ES.z - 20 + rand(-6, 6)),
+            );
+          // ---- Hudson River (west) + harbour (south) ----
+          const rmat = new THREE.MeshStandardMaterial({
+            color: 0x1a3a5a,
+            roughness: 0.25,
+            metalness: 0.35,
+            emissive: 0x123048,
+            emissiveIntensity: 0.35,
+          });
+          const river = new THREE.Mesh(new THREE.PlaneGeometry(150, 640), rmat);
+          river.rotation.x = -Math.PI / 2;
+          river.position.set(-305, 0.02, 0);
+          river.matrixAutoUpdate = false;
+          river.updateMatrix();
+          exploreWorld.add(river);
+          exWater = river;
+          const harbor = new THREE.Mesh(
+            new THREE.PlaneGeometry(460, 260),
+            rmat,
           );
-        // ---- Hudson River (west) + harbour (south) ----
-        const rmat = new THREE.MeshStandardMaterial({
-          color: 0x1a3a5a,
-          roughness: 0.25,
-          metalness: 0.35,
-          emissive: 0x123048,
-          emissiveIntensity: 0.35,
-        });
-        const river = new THREE.Mesh(new THREE.PlaneGeometry(150, 640), rmat);
-        river.rotation.x = -Math.PI / 2;
-        river.position.set(-305, 0.02, 0);
-        river.matrixAutoUpdate = false;
-        river.updateMatrix();
-        exploreWorld.add(river);
-        exWater = river;
-        const harbor = new THREE.Mesh(new THREE.PlaneGeometry(460, 260), rmat);
-        harbor.rotation.x = -Math.PI / 2;
-        harbor.position.set(-20, 0.02, 340);
-        harbor.matrixAutoUpdate = false;
-        harbor.updateMatrix();
-        exploreWorld.add(harbor);
-        // ---- Liberty Island + Statue (enterable) ----
-        exAdd(72, 0.5, 72, fmat(0x3a6a3a), LIB.x, 0.22, LIB.z); // island
-        exAdd(24, 1.2, 24, fmat(0x8a8f7a), LIB.x, 0.6, LIB.z - 16); // plaza
-        const lib = makeStatueOfLiberty();
-        lib.scale.set(2.2, 2.2, 2.2);
-        lib.position.set(LIB.x, 0.4, LIB.z + 8);
-        lib.rotation.y = Math.PI;
-        exploreWorld.add(lib);
-        exInteractables.push({
-          x: LIB.x,
-          z: LIB.z - 14,
-          r: 8,
-          label: "go up inside the Statue of Liberty",
-          action: () => enterStatue(),
-        });
-        for (let i = 0; i < 7; i++)
-          exPeople.push(
-            mkExPerson(LIB.x + rand(-20, 20), LIB.z - 16 + rand(-8, 8)),
+          harbor.rotation.x = -Math.PI / 2;
+          harbor.position.set(-20, 0.02, 340);
+          harbor.matrixAutoUpdate = false;
+          harbor.updateMatrix();
+          exploreWorld.add(harbor);
+          // ---- Liberty Island + Statue (enterable) ----
+          exAdd(72, 0.5, 72, fmat(0x3a6a3a), LIB.x, 0.22, LIB.z); // island
+          exAdd(24, 1.2, 24, fmat(0x8a8f7a), LIB.x, 0.6, LIB.z - 16); // plaza
+          const lib = makeStatueOfLiberty();
+          lib.scale.set(2.2, 2.2, 2.2);
+          lib.position.set(LIB.x, 0.4, LIB.z + 8);
+          lib.rotation.y = Math.PI;
+          exploreWorld.add(lib);
+          exInteractables.push({
+            x: LIB.x,
+            z: LIB.z - 14,
+            r: 8,
+            label: "go up inside the Statue of Liberty",
+            action: () => enterStatue(),
+          });
+          for (let i = 0; i < 7; i++)
+            exPeople.push(
+              mkExPerson(LIB.x + rand(-20, 20), LIB.z - 16 + rand(-8, 8)),
+            );
+          // ---- ferry terminal + drivable ferry ----
+          exAdd(26, 1, 22, fmat(0x6a4a2a), FERRY.x, 0.5, FERRY.z); // dock
+          exAdd(6, 4, 5, pickWinMat(6, 4), FERRY.x + 11, 2, FERRY.z - 5); // ticket house
+          exAdd(
+            18,
+            3,
+            1,
+            signMat("LIBERTY ISLAND FERRY", "#bfe3ff", 18, 3),
+            FERRY.x,
+            4,
+            FERRY.z - 10.4,
           );
-        // ---- ferry terminal + drivable ferry ----
-        exAdd(26, 1, 22, fmat(0x6a4a2a), FERRY.x, 0.5, FERRY.z); // dock
-        exAdd(6, 4, 5, pickWinMat(6, 4), FERRY.x + 11, 2, FERRY.z - 5); // ticket house
-        exAdd(
-          18,
-          3,
-          1,
-          signMat("LIBERTY ISLAND FERRY", "#bfe3ff", 18, 3),
-          FERRY.x,
-          4,
-          FERRY.z - 10.4,
-        );
-        boat = makeFerryBoat();
-        boat.position.set(FERRY.x, 0.1, FERRY.z + 9);
-        exploreWorld.add(boat);
-        exInteractables.push({
-          x: FERRY.x,
-          z: FERRY.z + 4,
-          r: 6,
-          label: "board & drive the ferry \u26f4",
-          action: () => boardFerry(),
-        });
-        // ---- New Jersey across the river: bridge, MetLife Stadium, American Dream ----
-        buildBridge();
-        buildNewJersey();
+          boat = makeFerryBoat();
+          boat.position.set(FERRY.x, 0.1, FERRY.z + 9);
+          exploreWorld.add(boat);
+          exInteractables.push({
+            x: FERRY.x,
+            z: FERRY.z + 4,
+            r: 6,
+            label: "board & drive the ferry \u26f4",
+            action: () => boardFerry(),
+          });
+          // ---- New Jersey across the river: bridge, MetLife Stadium, American Dream ----
+          buildBridge();
+          buildNewJersey();
+        } // end NYC-only landmarks
+        if (exCity === "boston") buildBostonExplore();
         // ---- spawn-area street life ----
         for (let z = -24; z <= 64; z += 16) {
           exLamp(-7, z);
@@ -6031,9 +6551,11 @@
         }
         buildSky();
         buildRain();
-        buildCentralPark();
-        buildTimesSquare();
-        buildWaterlineSquare();
+        if (exCity !== "boston") {
+          buildCentralPark();
+          buildTimesSquare();
+          buildWaterlineSquare();
+        }
         buildStreetLife();
         buildSubway();
         buildCityShops();
@@ -6884,13 +7406,44 @@
           yaw: Math.PI,
         },
       ];
+      const BOSTON_TRAVEL = [
+        { n: "Spawn Plaza", x: 0, z: 0, yaw: Math.PI },
+        {
+          n: "Boston Common \ud83c\udf33",
+          x: COMMON.x,
+          z: COMMON.z - 40,
+          yaw: Math.PI,
+        },
+        {
+          n: "Prudential Tower \ud83c\udfe2",
+          x: PRU.x,
+          z: PRU.z - 24,
+          yaw: Math.PI,
+        },
+        {
+          n: "State House \ud83c\udfdb\ufe0f",
+          x: STATE.x,
+          z: STATE.z - 22,
+          yaw: Math.PI,
+        },
+        {
+          n: "Fenway Park \u26be",
+          x: FENWAY.x,
+          z: FENWAY.z + 34,
+          yaw: Math.PI,
+        },
+        { n: "TD Garden \ud83c\udfc0", x: TDG.x, z: TDG.z - 24, yaw: Math.PI },
+      ];
+      function travelList() {
+        return exCity === "boston" ? BOSTON_TRAVEL : TRAVEL;
+      }
       function openTravel() {
         if (state !== "explore") return;
         travelOpen = true;
         const list = document.getElementById("ex-travel-list");
         if (list) {
           list.innerHTML = "";
-          TRAVEL.forEach((d, i) => {
+          travelList().forEach((d, i) => {
             const b = document.createElement("button");
             b.className = "travel-item";
             b.textContent = i + 1 + ".   " + d.n;
@@ -6907,7 +7460,7 @@
         if (box) box.style.display = "none";
       }
       function travelTo(i) {
-        const d = TRAVEL[i];
+        const d = travelList()[i];
         if (!d) return;
         player.x = d.x;
         player.z = d.z;
@@ -8940,6 +9493,432 @@
         return { x: X, z: Z - 4, y: 0, yaw: Math.PI };
       }
 
+      // ============================================================
+      //  EXPLORE BOSTON (Wave 2 - part 1): landmarks + enterable TD Garden
+      // ============================================================
+      function buildBostonExplore() {
+        exParent = null;
+        const rmat = new THREE.MeshStandardMaterial({
+          color: 0x1a3a5a,
+          roughness: 0.25,
+          metalness: 0.35,
+          emissive: 0x123048,
+          emissiveIntensity: 0.35,
+        });
+        const river = new THREE.Mesh(new THREE.PlaneGeometry(600, 120), rmat);
+        river.rotation.x = -Math.PI / 2;
+        river.position.set(-30, 0.02, -250);
+        river.matrixAutoUpdate = false;
+        river.updateMatrix();
+        exploreWorld.add(river);
+        exWater = river; // Charles River
+        buildBostonCommon(COMMON.x, COMMON.z);
+        bostonTower(PRU.x, PRU.z, 20, 20, 72, "PRUDENTIAL", 0);
+        bostonTower(HAN.x, HAN.z, 22, 8, 82, "HANCOCK", 0.35);
+        buildStateHouseExplore(STATE.x, STATE.z);
+        buildFenwayExplore(FENWAY.x, FENWAY.z);
+        buildTDGardenExplore(TDG.x, TDG.z);
+        exAdd(
+          22,
+          3,
+          1,
+          signMat("WELCOME TO BOSTON", "#ffd27a", 22, 3),
+          0,
+          6,
+          -20,
+        );
+        for (let i = 0; i < 8; i++)
+          exPeople.push(mkExPerson(rand(-40, 40), rand(-40, 40)));
+      }
+      function bostonTower(x, z, w, d, h, name, ry) {
+        const gm = glassTowerMat(w, h);
+        const body = new THREE.Mesh(boxGeo, gm);
+        body.scale.set(w, h, d);
+        body.position.set(x, h / 2, z);
+        if (ry) body.rotation.y = ry;
+        body.matrixAutoUpdate = false;
+        body.updateMatrix();
+        exploreWorld.add(body);
+        exAdd(w + 2, 3, d + 2, fmat(0x3a4048), x, 1.5, z);
+        addBlob(x, z, Math.max(w, d) * 0.8);
+        exAdd(
+          Math.min(w, 14),
+          2.5,
+          0.4,
+          signMat(name, "#bfe3ff", Math.min(w, 14), 2.5),
+          x,
+          h + 2.5,
+          z,
+          ry || 0,
+        );
+        exInteractables.push({
+          x: x,
+          z: z - (d / 2 + 3),
+          r: 3.6,
+          label: "visit the " + name + " Skywalk \ud83c\udfe2",
+          action: () => {
+            addCoins(3);
+            showToast("Great view from the " + name + "!", "#bfe3ff");
+          },
+        });
+      }
+      function buildStateHouseExplore(x, z) {
+        wallBox(x, z, 26, 18, 16, pickWinMat(26, 16));
+        exAdd(
+          24,
+          2,
+          0.5,
+          signMat("MASSACHUSETTS STATE HOUSE", "#ffd27a", 24, 2),
+          x,
+          10,
+          z - 9.2,
+        );
+        const dome = new THREE.Mesh(
+          new THREE.SphereGeometry(6, 20, 14),
+          new THREE.MeshStandardMaterial({
+            color: 0xffd54a,
+            metalness: 0.9,
+            roughness: 0.22,
+            emissive: 0x6a5010,
+            emissiveIntensity: 0.4,
+          }),
+        );
+        dome.scale.y = 1.1;
+        dome.position.set(x, 17, z);
+        dome.matrixAutoUpdate = false;
+        dome.updateMatrix();
+        exploreWorld.add(dome);
+        const cup = new THREE.Mesh(
+          cylGeo,
+          new THREE.MeshBasicMaterial({ color: 0xffe36a }),
+        );
+        cup.scale.set(0.6, 2.4, 0.6);
+        cup.position.set(x, 23, z);
+        cup.matrixAutoUpdate = false;
+        cup.updateMatrix();
+        exploreWorld.add(cup);
+        addBlob(x, z, 20);
+        for (let i = 0; i < 4; i++)
+          exPeople.push(mkExPerson(x + rand(-12, 12), z - 12 + rand(-4, 4)));
+      }
+      function buildBostonCommon(cx, cz) {
+        exParent = null;
+        exAdd(140, 0.14, 150, fmat(0x3f7a3a), cx, 0.06, cz);
+        exAdd(
+          140,
+          0.02,
+          150,
+          new THREE.MeshStandardMaterial({
+            color: 0x2f6a30,
+            roughness: 1,
+            transparent: true,
+            opacity: 0.4,
+          }),
+          cx,
+          0.09,
+          cz,
+        );
+        for (let i = -6; i <= 6; i++)
+          exAdd(
+            6,
+            0.05,
+            10,
+            fmat(0xbaa878),
+            cx + Math.sin(i * 0.5) * 34,
+            0.12,
+            cz + i * 10,
+          );
+        exAdd(
+          46,
+          0.3,
+          34,
+          new THREE.MeshStandardMaterial({
+            color: 0x2a78b0,
+            emissive: 0x145078,
+            emissiveIntensity: 0.4,
+            metalness: 0.5,
+            roughness: 0.2,
+            transparent: true,
+            opacity: 0.9,
+          }),
+          cx - 30,
+          0.2,
+          cz + 40,
+        ); // Frog Pond
+        exAdd(9, 0.5, 9, fmat(0xcfc8b8), cx + 28, 0.4, cz - 36);
+        for (let k = 0; k < 6; k++) {
+          const a = (k / 6) * 6.28;
+          exAdd(
+            0.5,
+            4,
+            0.5,
+            nycMetal,
+            cx + 28 + Math.cos(a) * 3.6,
+            2.2,
+            cz - 36 + Math.sin(a) * 3.6,
+          );
+        }
+        exAdd(10, 0.8, 10, fmat(0x8a3a2a), cx + 28, 4.4, cz - 36); // bandstand
+        for (let i = 0; i < 26; i++) {
+          const tx = cx + rand(-64, 64),
+            tz = cz + rand(-70, 70);
+          if (Math.hypot(tx - (cx - 30), tz - (cz + 40)) < 28) continue;
+          exTree(tx, tz, rand(0.8, 1.4));
+        }
+        for (let i = -5; i <= 5; i += 2)
+          coinPickup(cx + Math.sin(i * 0.5) * 34, cz + i * 10, "coin");
+        coinPickup(cx - 30, cz + 40, "star");
+        exAddSign("BOSTON COMMON", cx, cz - 72, "#9ee29a", 12);
+        for (let i = 0; i < 6; i++)
+          exPeople.push(mkExPerson(cx + rand(-50, 50), cz + rand(-60, 60)));
+      }
+      function buildFenwayExplore(cx, cz) {
+        exParent = null;
+        exAdd(90, 0.4, 80, fmat(0x2b5f2c), cx, 0.2, cz);
+        exAdd(20, 0.5, 20, fmat(0xb08a5a), cx, 0.26, cz + 6, Math.PI / 4); // infield
+        exAdd(
+          56,
+          11,
+          1.6,
+          new THREE.MeshStandardMaterial({ color: 0x2f6a34, roughness: 0.9 }),
+          cx - 22,
+          5.5,
+          cz - 34,
+        ); // Green Monster
+        exAdd(56, 1, 0.4, fmat(0xffe36a), cx - 22, 11.2, cz - 34);
+        for (let r = 0; r < 4; r++) {
+          const y = 2 + r * 3,
+            inx = 48 + r * 6,
+            inz = 44 + r * 6,
+            col = r % 2 ? 0x9a2a2a : 0x7a2020;
+          exAdd(inx * 2, 3, 4, fmat(col), cx, y, cz + inz);
+          exAdd(4, 3, inz * 1.2, fmat(col), cx - inx, y, cz + 6);
+          exAdd(4, 3, inz * 1.2, fmat(col), cx + inx, y, cz + 6);
+        }
+        for (const lx of [-40, 40])
+          for (const lz of [-30, 40]) {
+            exAdd(1, 20, 1, nycMetal, cx + lx, 10, cz + lz);
+            exAdd(
+              6,
+              3,
+              1.5,
+              new THREE.MeshStandardMaterial({
+                color: 0xffffff,
+                emissive: 0xffffff,
+                emissiveIntensity: 0.9,
+              }),
+              cx + lx,
+              21,
+              cz + lz,
+            );
+          }
+        exAdd(
+          30,
+          4,
+          1,
+          signMat("FENWAY PARK", "#c8102e", 30, 4),
+          cx,
+          14,
+          cz + 52,
+        );
+        addBlob(cx, cz, 60);
+        for (let i = 0; i < 8; i++)
+          exPeople.push(mkExPerson(cx + rand(-30, 30), cz + rand(-20, 30)));
+        exInteractables.push({
+          x: cx,
+          z: cz + 30,
+          r: 8,
+          label: "walk onto Fenway Park \u26be",
+          action: () => {
+            addCoins(3);
+            showToast("Welcome to Fenway Park!", "#c8102e");
+          },
+        });
+      }
+      function buildTDGardenExplore(cx, cz) {
+        exParent = null;
+        wallBox(
+          cx,
+          cz,
+          44,
+          34,
+          18,
+          new THREE.MeshStandardMaterial({
+            color: 0x8a8f98,
+            metalness: 0.4,
+            roughness: 0.5,
+          }),
+        );
+        const roof = new THREE.Mesh(
+          cylGeo,
+          new THREE.MeshStandardMaterial({
+            color: 0x9aa0a8,
+            metalness: 0.4,
+            roughness: 0.5,
+          }),
+        );
+        roof.rotation.z = Math.PI / 2;
+        roof.scale.set(10, 44, 34);
+        roof.position.set(cx, 18, cz);
+        roof.matrixAutoUpdate = false;
+        roof.updateMatrix();
+        exploreWorld.add(roof);
+        exAdd(
+          36,
+          4,
+          1,
+          signMat("TD GARDEN", "#ffd24a", 36, 4),
+          cx,
+          13,
+          cz - 17.2,
+        );
+        exAdd(6, 10, 0.5, fmat(0x1a7a44), cx - 14, 10, cz - 17.1);
+        addBlob(cx, cz, 40);
+        for (let i = 0; i < 8; i++)
+          exPeople.push(mkExPerson(cx + rand(-22, 22), cz - 18 + rand(-4, 6)));
+        exInteractables.push({
+          x: cx,
+          z: cz - 19,
+          r: 4.5,
+          label: "enter TD Garden (see the Celtics court) \ud83c\udfc0",
+          action: () => enterTDGarden(),
+        });
+      }
+      function enterTDGarden() {
+        enterInterior(buildTDGardenInterior, {
+          mode: "explore",
+          x: TDG.x,
+          z: TDG.z - 22,
+          yaw: Math.PI,
+          exitLabel: "exit to street",
+        });
+      }
+      function buildTDGardenInterior() {
+        const X = TDO.x,
+          Z = TDO.z,
+          W = 62,
+          D = 46,
+          wc = fmat(0x3a3f48),
+          H = 17;
+        iFloor(X, Z, W, D, 0, fmat(0x5a4030));
+        iAdd(W, 0.3, D, fmat(0x14161c), X, H, Z);
+        iWall(X - W / 2, Z, 0.3, D, H, wc);
+        iWall(X + W / 2, Z, 0.3, D, H, wc);
+        iWall(X, Z + D / 2, W, 0.3, H, wc);
+        iWall(X, Z - D / 2, W, 0.3, H, wc);
+        iAdd(
+          30,
+          0.12,
+          18,
+          new THREE.MeshStandardMaterial({ color: 0xd8a24a, roughness: 0.55 }),
+          X,
+          0.07,
+          Z,
+        ); // parquet court
+        for (let i = -7; i <= 7; i++) {
+          iAdd(30, 0.13, 0.18, fmat(0xb07a2a), X, 0.09, Z + i * 1.2);
+          iAdd(0.18, 0.13, 18, fmat(0xb07a2a), X + i * 2, 0.09, Z);
+        }
+        iAdd(0.2, 0.14, 18, fmat(0xffffff), X, 0.1, Z);
+        const circ = new THREE.Mesh(
+          cylGeo,
+          new THREE.MeshStandardMaterial({
+            color: 0x1a7a44,
+            emissive: 0x0a3a20,
+            emissiveIntensity: 0.25,
+          }),
+        );
+        circ.scale.set(4, 0.14, 4);
+        circ.position.set(X, 0.11, Z);
+        interiorWorld.add(circ);
+        for (const s of [-1, 1]) {
+          iAdd(0.3, 4, 0.3, nycMetal, X + s * 13, 2, Z);
+          iAdd(0.15, 0.15, 1.6, fmat(0xff5a2a), X + s * 12.1, 3.05, Z);
+          iAdd(
+            1.4,
+            0.1,
+            1.4,
+            new THREE.MeshBasicMaterial({ color: 0xffffff }),
+            X + s * 11.6,
+            3.5,
+            Z,
+          );
+        }
+        const cc = document.createElement("canvas");
+        cc.width = 64;
+        cc.height = 16;
+        const cg = cc.getContext("2d");
+        cg.fillStyle = "#20242c";
+        cg.fillRect(0, 0, 64, 16);
+        const crc = [
+          "#1a7a44",
+          "#dcdcdc",
+          "#0a7a3a",
+          "#f4f4f4",
+          "#c8c8c8",
+          "#2a8a4a",
+        ];
+        for (let i = 0; i < 300; i++) {
+          cg.fillStyle = crc[(Math.random() * crc.length) | 0];
+          cg.fillRect(Math.random() * 64, Math.random() * 16, 1.4, 1.4);
+        }
+        const ctex = new THREE.CanvasTexture(cc);
+        if (THREE.RepeatWrapping) {
+          ctex.wrapS = ctex.wrapT = THREE.RepeatWrapping;
+        }
+        ctex.repeat.set(8, 1);
+        const crowd = new THREE.MeshStandardMaterial({
+          map: ctex,
+          roughness: 0.9,
+        });
+        for (let r = 0; r < 4; r++) {
+          const y = 1.5 + r * 2.6,
+            dz = 13 + r * 3.2;
+          for (const s of [-1, 1]) iAdd(W - 8, 2.5, 3, crowd, X, y, Z + s * dz);
+        }
+        iAdd(
+          7,
+          3.5,
+          7,
+          new THREE.MeshStandardMaterial({
+            color: 0x0a0a12,
+            emissive: 0x2a6adf,
+            emissiveIntensity: 0.55,
+          }),
+          X,
+          12,
+          Z,
+        ); // scoreboard
+        for (let i = -3; i <= 3; i++)
+          iAdd(
+            1.4,
+            3,
+            0.2,
+            fmat(0x1a7a44),
+            X + i * 3.4,
+            H - 1.4,
+            Z - D / 2 + 0.5,
+          ); // banners
+        iSign(
+          X,
+          Z - D / 2 + 0.5,
+          "TD GARDEN \u2014 HOME OF THE CELTICS",
+          "#8fe3b0",
+          H - 4.5,
+          W - 8,
+        );
+        for (let i = 0; i < 4; i++)
+          iPerson(X + rand(-12, 12), Z + rand(-6, 6), rand(0, 6.28));
+        interiorPortals.push({
+          x: X,
+          z: Z - D / 2 - 0.6,
+          r: 3,
+          label: "exit to street",
+          action: () => exitInterior(),
+        });
+        return { x: X, z: Z - D / 2 + 3, y: 0, yaw: Math.PI };
+      }
+
       function buildCentralPark() {
         exParent = null;
         const X = CPARK.x,
@@ -9327,13 +10306,26 @@
       const SUB_Y = -15,
         SUBO = { x: 6900, z: 6000 };
       function buildSubway() {
-        subStations = [
-          { n: "Spawn", x: 0, z: 26 },
-          { n: "Times Square", x: TSQ.x, z: TSQ.z + 13 },
-          { n: "Empire State", x: ES.x + 22, z: ES.z },
-          { n: "Central Park", x: CPARK.x - 64, z: CPARK.z },
-          { n: "Ferry", x: FERRY.x + 16, z: FERRY.z },
-        ];
+        subStations =
+          exCity === "boston"
+            ? [
+                { n: "Park Street", x: 0, z: 26 },
+                { n: "Copley", x: PRU.x + 34, z: PRU.z },
+                { n: "Kenmore \u2014 Fenway", x: FENWAY.x + 46, z: FENWAY.z },
+                {
+                  n: "North Station \u2014 TD Garden",
+                  x: TDG.x - 30,
+                  z: TDG.z,
+                },
+                { n: "Boylston \u2014 Common", x: COMMON.x - 66, z: COMMON.z },
+              ]
+            : [
+                { n: "Spawn", x: 0, z: 26 },
+                { n: "Times Square", x: TSQ.x, z: TSQ.z + 13 },
+                { n: "Empire State", x: ES.x + 22, z: ES.z },
+                { n: "Central Park", x: CPARK.x - 64, z: CPARK.z },
+                { n: "Ferry", x: FERRY.x + 16, z: FERRY.z },
+              ];
         const pts = subStations.map((s) => V(s.x, SUB_Y, s.z));
         subCurve = new THREE.CatmullRomCurve3(pts, true, "catmullrom", 0.3);
         const tunnel = new THREE.Mesh(
@@ -9969,6 +10961,63 @@
           },
         },
       ];
+      const BOSTON_LANDMARKS = [
+        {
+          id: "common",
+          n: "Boston Common",
+          c: "#9ee29a",
+          get x() {
+            return COMMON.x;
+          },
+          get z() {
+            return COMMON.z;
+          },
+        },
+        {
+          id: "pru",
+          n: "Prudential",
+          c: "#bfe3ff",
+          get x() {
+            return PRU.x;
+          },
+          get z() {
+            return PRU.z;
+          },
+        },
+        {
+          id: "state",
+          n: "State House",
+          c: "#ffd54a",
+          get x() {
+            return STATE.x;
+          },
+          get z() {
+            return STATE.z;
+          },
+        },
+        {
+          id: "fenway",
+          n: "Fenway Park",
+          c: "#ff9a9a",
+          get x() {
+            return FENWAY.x;
+          },
+          get z() {
+            return FENWAY.z;
+          },
+        },
+        {
+          id: "tdg",
+          n: "TD Garden",
+          c: "#8fe3b0",
+          get x() {
+            return TDG.x;
+          },
+          get z() {
+            return TDG.z;
+          },
+        },
+      ];
       let exCoins = []; // collectible pickups in explore {mesh,x,z,kind,got}
 
       // ---------- economy ----------
@@ -10307,7 +11356,7 @@
           cxp + (x - player.x) * sc,
           cyp + (z - player.z) * sc,
         ];
-        for (const L of LANDMARKS) {
+        for (const L of exCity === "boston" ? BOSTON_LANDMARKS : LANDMARKS) {
           let [mx, my] = toMap(L.x, L.z);
           if (mx < 3 || mx > W - 3 || my < 3 || my > H - 3) {
             const ang = Math.atan2(L.z - player.z, L.x - player.x);
