@@ -17,3 +17,4 @@ This is a game that was creating using Claude amnd prompting during tutoring ses
 1. There is some flashing on the ground and wall textures
 1. Make the subway a new environment instead of above ground
 1. Clipped through the floor on Antarctica level (fix that)
+1. Warning: Three.MeshBasicMaterial: 'emissive' is not a property of this material.
