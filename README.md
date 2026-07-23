@@ -5,7 +5,7 @@ This is a game that was creating using Claude amnd prompting during tutoring ses
 # Bugs / Changes
 
 1. Make a hotkey for speed on the computer
-1. Fix the view of the plane
+1. Fix the cockpit view of the plane and make it so you can exit the plane
 1. If you change the car speed it also changes the plane speed
 1. Make it so you cannot clip through furniture
 1. For the NYC voidrunner level, make it so apartments show up further in the level
