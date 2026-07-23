@@ -4202,6 +4202,12 @@
       renderer.domElement.addEventListener("mousemove", (e) => {
         if (!pointerLocked) return;
         const sens = 0.0022;
+        if (flying) {
+          // look around the cockpit
+          flyLookYaw = clamp(flyLookYaw - e.movementX * sens, -2.0, 2.0);
+          flyLookPitch = clamp(flyLookPitch - e.movementY * sens, -0.9, 0.7);
+          return;
+        }
         player.yaw -= e.movementX * sens;
         player.pitch -= e.movementY * sens;
         const lim = Math.PI / 2 - 0.05;
@@ -4307,6 +4313,11 @@
               dy = t.clientY - lookY;
             lookX = t.clientX;
             lookY = t.clientY;
+            if (flying) {
+              flyLookYaw = clamp(flyLookYaw - dx * LOOK_SENS, -2.0, 2.0);
+              flyLookPitch = clamp(flyLookPitch - dy * LOOK_SENS, -0.9, 0.7);
+              return;
+            }
             player.yaw -= dx * LOOK_SENS;
             player.pitch -= dy * LOOK_SENS;
             const lim = Math.PI / 2 - 0.05;
@@ -5304,6 +5315,7 @@
       const FENWAY = { x: -150, z: -72 }; // Fenway Park
       const TDG = { x: 150, z: -34 }; // TD Garden (enterable arena)
       const TDO = { x: 6900, z: 6900 }; // TD Garden interior (far origin)
+      const BOSAIR = { x: 330, z: 30 }; // Boston Logan-style airport (east, across the harbour)
       const exColliders = []; // {x,z,hw,hd}
       const exInteractables = []; // {x,z,r,label,action,done}
       const exCars2 = []; // street cars {mesh,axis,lane,pos,dir,speed,lo,hi}
@@ -5880,6 +5892,12 @@
           if (Math.abs(x - FENWAY.x) < 54 && Math.abs(z - FENWAY.z) < 50)
             return true; // Fenway
           if (Math.abs(x - TDG.x) < 30 && Math.abs(z - TDG.z) < 24) return true; // TD Garden
+          for (const L of BOSTON_LM) {
+            const pad = (L.r || 16) + 14;
+            if (Math.abs(x - L.x) < pad && Math.abs(z - L.z) < pad) return true;
+          } // the 50 landmarks
+          if (Math.abs(x - BOSAIR.x) < 130 && Math.abs(z - BOSAIR.z) < 115)
+            return true; // Logan airport
           if (Math.abs(x - 34) < 9 && Math.abs(z + 24) < 9) return true; // coffee shop
           if (Math.abs(x + 34) < 9 && Math.abs(z + 24) < 9) return true; // arcade
           if (Math.abs(x - 36) < 9 && Math.abs(z - 26) < 9) return true; // toy store
@@ -5900,6 +5918,335 @@
         if (Math.abs(x + 34) < 9 && Math.abs(z + 24) < 9) return true; // arcade
         if (Math.abs(x - 36) < 9 && Math.abs(z - 26) < 9) return true; // toy store
         return false;
+      }
+      // ============================================================
+      //  BOSTON CITY BUILD — unique neighborhood buildings (no NYC assets reused)
+      // ============================================================
+      const bExRoof = new THREE.MeshStandardMaterial({
+        color: 0x33302a,
+        roughness: 0.96,
+      });
+      const bExBot = new THREE.MeshStandardMaterial({
+        color: 0x14120e,
+        roughness: 1,
+      });
+      const bExMetal = new THREE.MeshStandardMaterial({
+        color: 0x2a2a2e,
+        roughness: 0.5,
+        metalness: 0.6,
+      });
+      function makeBostonFacade(base, winOn, winOff, rows, cols, brick) {
+        const c = document.createElement("canvas");
+        c.width = cols * 16;
+        c.height = rows * 16;
+        const g = c.getContext("2d");
+        g.fillStyle = base;
+        g.fillRect(0, 0, c.width, c.height);
+        if (brick) {
+          g.fillStyle = "rgba(0,0,0,0.16)";
+          for (let r = 0; r < rows * 3; r++)
+            g.fillRect(0, Math.round((r * c.height) / (rows * 3)), c.width, 1);
+        }
+        for (let r = 0; r < rows; r++)
+          for (let k = 0; k < cols; k++) {
+            g.fillStyle = Math.random() < 0.42 ? winOn : winOff;
+            g.fillRect(k * 16 + 3, r * 16 + 3, 10, 11);
+          }
+        const t = new THREE.CanvasTexture(c);
+        t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+        return t;
+      }
+      function bostonMatSet(base, on, off, brick, metal) {
+        const set = [];
+        for (const cols of [2, 3, 4])
+          for (const rows of [10, 16, 24]) {
+            const tex = makeBostonFacade(base, on, off, rows, cols, brick);
+            set.push({
+              cols,
+              rows,
+              mat: new THREE.MeshStandardMaterial({
+                color: 0xffffff,
+                map: tex,
+                emissiveMap: tex,
+                emissive: 0xffffff,
+                emissiveIntensity: 0.3,
+                roughness: metal ? 0.2 : 0.88,
+                metalness: metal || 0,
+              }),
+            });
+          }
+        return set;
+      }
+      const bMatBrownstone = bostonMatSet(
+        "#7a5238",
+        "#ffd9a0",
+        "#2b1d15",
+        false,
+        0,
+      );
+      const bMatBrick = bostonMatSet("#8e3b2a", "#ffd68a", "#2a1216", true, 0);
+      const bMatGlass = bostonMatSet(
+        "#3f6f90",
+        "#cfeeff",
+        "#356a86",
+        false,
+        0.5,
+      );
+      const bMatConcrete = bostonMatSet(
+        "#9a978c",
+        "#cfe0e8",
+        "#5a5850",
+        false,
+        0,
+      );
+      const bMatStone = bostonMatSet("#b8a888", "#ffe8b0", "#5a5040", false, 0);
+      function pickB(set, w, h) {
+        const cols = clamp(Math.round(w / 3), 2, 4),
+          rows = clamp(Math.round(h / 3), 10, 24);
+        let best = set[0],
+          bd = 1e9;
+        for (const m of set) {
+          const dd = Math.abs(m.cols - cols) + Math.abs(m.rows - rows) * 0.15;
+          if (dd < bd) {
+            bd = dd;
+            best = m;
+          }
+        }
+        return best.mat;
+      }
+      function bBox(cx, cz, w, h, d, win, noRoof) {
+        const m = new THREE.Mesh(boxGeo, [
+          win,
+          win,
+          noRoof ? win : bExRoof,
+          bExBot,
+          win,
+          win,
+        ]);
+        m.scale.set(w, h, d);
+        m.position.set(cx, h / 2, cz);
+        m.matrixAutoUpdate = false;
+        m.updateMatrix();
+        (exParent || exploreWorld).add(m);
+        return m;
+      }
+      function bGlassTower(cx, cz, w, d, h) {
+        const win = pickB(bMatGlass, w, h);
+        bBox(cx, cz, w, h, d, win);
+        exColl(cx, cz, w, d);
+        const cr = new THREE.Mesh(boxGeo, [
+          win,
+          win,
+          bExRoof,
+          bExBot,
+          win,
+          win,
+        ]);
+        cr.scale.set(w * 0.7, h * 0.22, d * 0.7);
+        cr.position.set(cx, h + h * 0.11, cz);
+        cr.matrixAutoUpdate = false;
+        cr.updateMatrix();
+        (exParent || exploreWorld).add(cr); // setback crown
+        for (let i = -1; i <= 1; i++) {
+          exAdd(
+            0.25,
+            h,
+            0.25,
+            bExMetal,
+            cx + i * w * 0.32,
+            h / 2,
+            cz - d / 2 - 0.05,
+          );
+        }
+      } // mullions
+      function bStoneTower(cx, cz, w, d, h) {
+        const win = pickB(bMatStone, w, h);
+        bBox(cx, cz, w, h, d, win);
+        exColl(cx, cz, w, d);
+        exAdd(
+          w * 0.78,
+          h * 0.14,
+          d * 0.78,
+          pickB(bMatStone, w * 0.78, 3),
+          cx,
+          h + h * 0.07,
+          cz,
+        );
+        exAdd(
+          w * 0.5,
+          h * 0.12,
+          d * 0.5,
+          pickB(bMatStone, w * 0.5, 3),
+          cx,
+          h + h * 0.2,
+          cz,
+        );
+        exAdd(0.5, h * 0.12, 0.5, bExMetal, cx, h + h * 0.3, cz);
+      } // spire
+      function bBrickTenement(cx, cz, w, d, h) {
+        const win = pickB(bMatBrick, w, h);
+        bBox(cx, cz, w, h, d, win);
+        exColl(cx, cz, w, d);
+        exAdd(w + 0.4, 0.8, d + 0.4, fmat(0x5a2418), cx, h + 0.4, cz); // cornice
+        for (let f = 1; f < Math.max(2, Math.floor(h / 4)); f++) {
+          const fy = f * 4;
+          exAdd(w * 0.55, 0.15, 1.1, bExMetal, cx, fy, cz - d / 2 - 0.55);
+          exAdd(0.15, 4, 0.15, bExMetal, cx - w * 0.22, fy + 2, cz - d / 2 - 1);
+          exAdd(0.15, 4, 0.15, bExMetal, cx + w * 0.22, fy + 2, cz - d / 2 - 1);
+        }
+      } // fire escape
+      function bBrutalist(cx, cz, w, d, h) {
+        const T = 3;
+        for (let t = 0; t < T; t++) {
+          const f = 0.62 + t * 0.15,
+            tw = w * f,
+            td = d * f,
+            th = (h / T) * 0.92;
+          exAdd(
+            tw,
+            th,
+            td,
+            pickB(bMatConcrete, tw, th),
+            cx,
+            h * ((t + 0.5) / T),
+            cz,
+          );
+        }
+        exColl(
+          cx,
+          cz,
+          w * (0.62 + (T - 1) * 0.15),
+          d * (0.62 + (T - 1) * 0.15),
+        );
+        exAdd(w, 1, d, fmat(0x8a877c), cx, h + 0.5, cz);
+      }
+      function bBrownstoneRow(cx, cz, w, d) {
+        const units = 2 + (Math.random() < 0.5 ? 1 : 0),
+          uw = w / units;
+        for (let u = 0; u < units; u++) {
+          const ux = cx - w / 2 + uw * (u + 0.5),
+            h = rand(11, 17),
+            win = pickB(bMatBrownstone, uw, h);
+          bBox(ux, cz, uw - 0.4, h, d, win);
+          exColl(ux, cz, uw - 0.4, d);
+          exAdd(uw, 0.7, d + 0.4, fmat(0x5a3f2a), ux, h + 0.35, cz); // cornice
+          exAdd(
+            uw * 0.5,
+            h * 0.6,
+            1.3,
+            win,
+            ux,
+            h * 0.42 + 0.6,
+            cz - d / 2 - 0.55,
+          ); // bay window
+          for (let s = 0; s < 3; s++)
+            exAdd(
+              2.4,
+              0.4,
+              1.0 - s * 0.25,
+              fmat(0x8f8f88),
+              ux,
+              0.2 + s * 0.4,
+              cz - d / 2 - 1.7 + s * 0.45,
+            ); // stoop
+          exAdd(1.2, 2.3, 0.2, fmat(0x241610), ux, 1.15, cz - d / 2 - 0.05); // door
+          exAdd(
+            0.9,
+            2.6,
+            0.9,
+            fmat(0x5a4030),
+            ux + uw * 0.28,
+            h + 1.3,
+            cz + d * 0.2,
+          ); // chimney
+        }
+      }
+      const BOSTON_SHOPNAMES = [
+        "CHOWDER HOUSE",
+        "CANNOLI CO.",
+        "BEANTOWN BOOKS",
+        "HARBOR FISH CO.",
+        "COMMON GROUNDS COFFEE",
+        "BRAHMIN BAKERY",
+        "CODFISH DELI",
+        "REVERE HARDWARE",
+        "BEACON BARBER",
+        "CHARLES ST. WINE",
+        "MINUTEMAN MARKET",
+        "BAY STATE GROCER",
+        "COBBLESTONE CAFE",
+        "SCOLLAY DINER",
+        "TREMONT FLORIST",
+        "WHARF & ANCHOR",
+        "OLD IRONSIDES OUTFITTERS",
+        "PARK ST. PHARMACY",
+      ];
+      function bBostonSign(cx, cz, w, d, name) {
+        const bracket = new THREE.Mesh(boxGeo, bExMetal);
+        bracket.scale.set(0.15, 0.15, 1.6);
+        bracket.position.set(cx, 3.4, cz - d / 2 - 0.8);
+        bracket.matrixAutoUpdate = false;
+        bracket.updateMatrix();
+        (exParent || exploreWorld).add(bracket);
+        exAdd(
+          3.2,
+          1.3,
+          0.2,
+          signMat(name, "#f0e2c0", 3.2, 1.3),
+          cx,
+          2.7,
+          cz - d / 2 - 1.5,
+        ); // hanging wood sign
+        exAdd(3.4, 0.14, 1.8, fmat(0x2a1a12), cx, 3.3, cz - d / 2 - 1.5); // canopy
+      }
+      function bostonHood(cx, cz) {
+        if (cx < -70) return "backbay"; // west = Back Bay glass
+        if (cz < -70) return "northend"; // north = North End brick
+        if (Math.abs(cx) < 44 && Math.abs(cz - 14) < 40) return "govt"; // centre = Government Center brutalist
+        if (cz > 66) return "financial"; // south = Financial District towers
+        return "beacon"; // rest = Beacon Hill brownstones
+      }
+      function exBostonBlock(gx, gz) {
+        const cx = gx * CITY_STEP,
+          cz = gz * CITY_STEP;
+        if (inReserved(cx, cz)) return;
+        if (Math.random() < 0.12) return; // irregular gaps → little squares (winding feel)
+        const grp = new THREE.Group();
+        exParent = grp;
+        const bx = cx + rand(-9, 9),
+          bz = cz + rand(-9, 9); // jitter off the grid
+        const hood = bostonHood(cx, cz),
+          w = CITY_STEP - rand(15, 23),
+          d = CITY_STEP - rand(15, 23);
+        if (hood === "backbay")
+          bGlassTower(bx, bz, w * 0.7, d * 0.7, rand(42, 76));
+        else if (hood === "northend")
+          bBrickTenement(bx, bz, w * 0.72, d * 0.72, rand(18, 30));
+        else if (hood === "govt")
+          bBrutalist(bx, bz, w * 0.8, d * 0.8, rand(20, 34));
+        else if (hood === "financial") {
+          if (Math.random() < 0.5)
+            bGlassTower(bx, bz, w * 0.68, d * 0.68, rand(46, 70));
+          else bStoneTower(bx, bz, w * 0.68, d * 0.68, rand(40, 64));
+        } else bBrownstoneRow(bx, bz, w, d);
+        if (Math.hypot(cx, cz) < 150 && Math.random() < 0.5)
+          bBostonSign(
+            bx,
+            bz,
+            w,
+            d,
+            BOSTON_SHOPNAMES[(Math.random() * BOSTON_SHOPNAMES.length) | 0],
+          );
+        if (Math.hypot(cx, cz) < 170) {
+          exLamp(cx + w / 2 + 3, cz + d / 2 + 3);
+          if (Math.random() < 0.4)
+            exTree(cx - (w / 2 + 2.6), cz + (d / 2 + 2.6));
+        }
+        exParent = null;
+        grp.matrixAutoUpdate = false;
+        grp.updateMatrix();
+        exploreWorld.add(grp);
+        exChunks.push({ group: grp, x: cx, z: cz });
       }
       function exBlockGroup(gx, gz) {
         const cx = gx * CITY_STEP,
@@ -6367,30 +6714,49 @@
         ground.matrixAutoUpdate = false;
         ground.updateMatrix();
         exploreWorld.add(ground);
+        exGround = ground;
         // ---- big city grid (each block culled by the render bubble) ----
         for (let gx = -CITY_G; gx <= CITY_G; gx++)
-          for (let gz = -CITY_G; gz <= CITY_G; gz++) exBlockGroup(gx, gz);
+          for (let gz = -CITY_G; gz <= CITY_G; gz++) {
+            if (exCity === "boston") exBostonBlock(gx, gz);
+            else exBlockGroup(gx, gz);
+          }
         // ---- named enterable shops ringing the spawn plaza ----
-        exShop(
-          -14,
-          17,
-          10,
-          9,
-          7,
-          +1,
-          "PEPPERINO",
-          "pizza",
-          new THREE.MeshStandardMaterial({
-            color: 0xc0392b,
-            roughness: 0.7,
-            metalness: 0.0,
-          }),
-        );
-        exShop(14, 14, 10, 9, 7, -1, "KOENIG DELI", "deli");
-        exShop(-14, -13, 10, 9, 7, +1, "CORNER MART", "shop");
-        exShop(14, -11, 10, 9, 7, -1, "SUNRISE DELI", "deli");
-        exShop(-24, 44, 10, 9, 7, +1, "BEAN THERE COFFEE", "shop");
-        exShop(24, 44, 10, 9, 7, -1, "SLICE OF LIFE", "pizza");
+        const SHOPSET =
+          exCity === "boston"
+            ? [
+                ["NORTH END CANNOLI", "pizza", 0x7a2a2a],
+                ["QUINCY MARKET DELI", "deli", null],
+                ["HAYMARKET GROCER", "shop", null],
+                ["HARBORSIDE FISH CO.", "deli", null],
+                ["CHARLES ST. COFFEE", "shop", null],
+                ["BEANTOWN SLICE", "pizza", 0x9a3a2a],
+              ]
+            : [
+                ["PEPPERINO", "pizza", 0xc0392b],
+                ["KOENIG DELI", "deli", null],
+                ["CORNER MART", "shop", null],
+                ["SUNRISE DELI", "deli", null],
+                ["BEAN THERE COFFEE", "shop", null],
+                ["SLICE OF LIFE", "pizza", null],
+              ];
+        const SPOS = [
+          [-14, 17, 10, 9, 7, +1],
+          [14, 14, 10, 9, 7, -1],
+          [-14, -13, 10, 9, 7, +1],
+          [14, -11, 10, 9, 7, -1],
+          [-24, 44, 10, 9, 7, +1],
+          [24, 44, 10, 9, 7, -1],
+        ];
+        for (let i = 0; i < SPOS.length; i++) {
+          const p = SPOS[i],
+            s = SHOPSET[i];
+          const mat =
+            s[2] != null
+              ? new THREE.MeshStandardMaterial({ color: s[2], roughness: 0.7 })
+              : undefined;
+          exShop(p[0], p[1], p[2], p[3], p[4], p[5], s[0], s[1], mat);
+        }
         // ice-cream cart + vendor next to Pepperino
         exAdd(2.4, 1.3, 1.6, fmat(0xfff0f6), -7, 0.75, 23);
         exAdd(2.6, 0.2, 1.8, fmat(0xff9ad0), -7, 1.45, 23);
@@ -6420,9 +6786,17 @@
           },
         });
         // a few enterable homes (walk into living rooms)
-        exShop(-24, -30, 11, 10, 9, +1, "THE HAMILTON APTS", "home");
-        exShop(24, -30, 11, 10, 9, -1, "PARKSIDE RESIDENCES", "home");
-        exShop(-40, 16, 11, 10, 9, +1, "BRICK ROW HOMES", "home");
+        const HOMES =
+          exCity === "boston"
+            ? [
+                "BEACON HILL FLATS",
+                "CHARLESGATE RESIDENCES",
+                "LOUISBURG SQ HOMES",
+              ]
+            : ["THE HAMILTON APTS", "PARKSIDE RESIDENCES", "BRICK ROW HOMES"];
+        exShop(-24, -30, 11, 10, 9, +1, HOMES[0], "home");
+        exShop(24, -30, 11, 10, 9, -1, HOMES[1], "home");
+        exShop(-40, 16, 11, 10, 9, +1, HOMES[2], "home");
         // ---- NYC-only landmarks ----
         if (exCity !== "boston") {
           // ---- sports park + airport (always visible) ----
@@ -6618,10 +6992,23 @@
             o.receiveShadow = false;
           });
         }
+        // any interact marker that ended up inside a building gets nudged out to clear ground
+        unblockMarkers();
         // freeze static transforms so the big city costs almost nothing per frame
         exploreWorld.matrixAutoUpdate = false;
         exploreWorld.updateMatrixWorld(true);
         exReady = true;
+      }
+      function unblockMarkers() {
+        for (const i of exInteractables) {
+          for (let pass = 0; pass < 5; pass++) {
+            const r = exResolve(i.x, i.z, 0.6);
+            const push = Math.hypot(r.x - i.x, r.z - i.z);
+            if (push <= 0.9) break;
+            i.x = r.x;
+            i.z = r.z;
+          }
+        }
       }
 
       function exResolve(px, pz, rad) {
@@ -6686,6 +7073,10 @@
       }
       function tryInteract() {
         if (state !== "explore") return;
+        if (flying && taxiing && planeSpeed < 4) {
+          exitPlaneOnGround();
+          return;
+        }
         if (riding) {
           endRide();
           return;
@@ -7311,8 +7702,7 @@
       }
       function toggleView() {
         if (driving) carView = carView ? 0 : 1;
-        else if (flying) planeView = planeView ? 0 : 1;
-      }
+      } // flying is cockpit-view only
       function updateDrive(dt) {
         let throttle = 0,
           steer = 0;
@@ -7406,7 +7796,7 @@
           yaw: Math.PI,
         },
       ];
-      const BOSTON_TRAVEL = [
+      const BOSTON_TRAVEL_FIXED = [
         { n: "Spawn Plaza", x: 0, z: 0, yaw: Math.PI },
         {
           n: "Boston Common \ud83c\udf33",
@@ -7434,8 +7824,51 @@
         },
         { n: "TD Garden \ud83c\udfc0", x: TDG.x, z: TDG.z - 24, yaw: Math.PI },
       ];
+      const BOSTON_TRAVEL_PICKS = [
+        ["Faneuil Hall", "Faneuil Hall \ud83c\udfdb\ufe0f"],
+        ["Quincy Market", "Quincy Market"],
+        ["Old North Church", "Old North Church \u26ea"],
+        ["Bunker Hill Monument", "Bunker Hill Monument"],
+        ["USS Constitution", "USS Constitution \u26f5"],
+        ["New England Aquarium", "New England Aquarium \ud83d\udc20"],
+        ["Copley Square", "Copley Square"],
+        ["Boston Public Library", "Boston Public Library \ud83d\udcda"],
+        ["Trinity Church", "Trinity Church"],
+        ["Museum of Fine Arts", "Museum of Fine Arts"],
+        ["Symphony Hall", "Symphony Hall \ud83c\udfbb"],
+        ["Museum of Science", "Museum of Science \ud83d\udd2c"],
+        ["South Station", "South Station \ud83d\ude82"],
+        ["Boston Public Garden", "Public Garden \ud83e\udd86"],
+        ["Harvard University", "Harvard University \ud83c\udf93"],
+        ["Massachusetts Institute of Technology", "MIT \ud83c\udf93"],
+        ["Castle Island & Fort Independence", "Castle Island"],
+      ];
+      const BOSTON_TRAVEL_AIRPORT = {
+        n: "Boston Logan Airport \u2708",
+        x: BOSAIR.x - 89,
+        z: BOSAIR.z + 51,
+        yaw: -Math.PI / 2,
+      };
+      let _bosTravel = null;
+      function bostonTravel() {
+        // built from the landmarks' live positions so it can never go stale
+        if (_bosTravel) return _bosTravel;
+        _bosTravel = BOSTON_TRAVEL_FIXED.slice();
+        _bosTravel.push(BOSTON_TRAVEL_AIRPORT);
+        for (const p of BOSTON_TRAVEL_PICKS) {
+          const L = BOSTON_LM.find((l) => l.n === p[0]);
+          if (L)
+            _bosTravel.push({
+              n: p[1],
+              x: L.x,
+              z: L.z - ((L.r || 16) + 9),
+              yaw: Math.PI,
+            });
+        }
+        return _bosTravel;
+      }
       function travelList() {
-        return exCity === "boston" ? BOSTON_TRAVEL : TRAVEL;
+        return exCity === "boston" ? bostonTravel() : TRAVEL;
       }
       function openTravel() {
         if (state !== "explore") return;
@@ -7966,6 +8399,13 @@
         planeThrottle = 0.6,
         planeView = 1,
         airborne = false;
+      let flyNav = null,
+        crossInbound = false,
+        crossArrived = false,
+        crossFading = false,
+        exGround = null,
+        taxiing = false;
+      const CROSS_DIST = 7000; // how far out you must fly before the other city takes over (~3 min round trip)
       const PLANE_MIN = 24,
         PLANE_MAX = 82,
         PLANE_ROTATE = 30;
@@ -8084,6 +8524,175 @@
           th.rotation.y = s * 0.2;
           g.add(th);
         }
+        // ---- extra realism: pylons, fan faces, bogies, doors, panel lines, livery, lights ----
+        const grey = new THREE.MeshStandardMaterial({
+          color: 0x9aa0aa,
+          roughness: 0.45,
+          metalness: 0.5,
+        });
+        const tyre = new THREE.MeshStandardMaterial({
+          color: 0x1b1c20,
+          roughness: 0.95,
+        });
+        const gearParts = [];
+        for (const s of [-1, 1]) {
+          const pyl = new THREE.Mesh(boxGeo, grey);
+          pyl.scale.set(0.5, 1.6, 3.2);
+          pyl.position.set(s * 8.5, CY - 1.6, -0.6);
+          g.add(pyl); // engine pylon
+          const cowl = new THREE.Mesh(cylGeo, white);
+          cowl.scale.set(1.32, 1.0, 1.32);
+          cowl.rotation.x = Math.PI / 2;
+          cowl.position.set(s * 8.5, CY - 2.4, -3.7);
+          g.add(cowl);
+          const fan = new THREE.Mesh(
+            cylGeo,
+            new THREE.MeshStandardMaterial({
+              color: 0x14161c,
+              roughness: 0.35,
+              metalness: 0.7,
+            }),
+          );
+          fan.scale.set(1.05, 0.25, 1.05);
+          fan.rotation.x = Math.PI / 2;
+          fan.position.set(s * 8.5, CY - 2.4, -4.0);
+          g.add(fan);
+          for (let b = 0; b < 10; b++) {
+            const bl = new THREE.Mesh(boxGeo, grey);
+            bl.scale.set(0.13, 1.9, 0.1);
+            bl.position.set(s * 8.5, CY - 2.4, -4.05);
+            bl.rotation.z = b * 0.628;
+            g.add(bl);
+          }
+          const spin = new THREE.Mesh(coneGeo, grey);
+          spin.scale.set(0.34, 0.7, 0.34);
+          spin.rotation.x = -Math.PI / 2;
+          spin.position.set(s * 8.5, CY - 2.4, -4.35);
+          g.add(spin);
+          const exh = new THREE.Mesh(
+            cylGeo,
+            new THREE.MeshStandardMaterial({
+              color: 0x3a3c44,
+              roughness: 0.5,
+              metalness: 0.6,
+            }),
+          );
+          exh.scale.set(0.8, 1.0, 0.8);
+          exh.rotation.x = Math.PI / 2;
+          exh.position.set(s * 8.5, CY - 2.4, 1.4);
+          g.add(exh);
+          // main gear: strut + 4-wheel bogie + door
+          const strut = new THREE.Mesh(cylGeo, grey);
+          strut.scale.set(0.24, 2.4, 0.24);
+          strut.position.set(s * 3.4, CY - 2.6, 2);
+          g.add(strut);
+          gearParts.push(strut);
+          for (const wz of [1.2, 2.8])
+            for (const wx of [-0.55, 0.55]) {
+              const wh = new THREE.Mesh(cylGeo, tyre);
+              wh.scale.set(0.62, 0.42, 0.62);
+              wh.rotation.z = Math.PI / 2;
+              wh.position.set(s * 3.4 + wx, CY - 3.7, wz);
+              g.add(wh);
+              gearParts.push(wh);
+            }
+          const gd = new THREE.Mesh(boxGeo, white);
+          gd.scale.set(0.12, 1.6, 3.2);
+          gd.position.set(s * 2.6, CY - 2.4, 2);
+          g.add(gd);
+          gearParts.push(gd);
+        }
+        const nstrut = new THREE.Mesh(cylGeo, grey);
+        nstrut.scale.set(0.2, 2.2, 0.2);
+        nstrut.position.set(0, CY - 2.7, -11);
+        g.add(nstrut);
+        gearParts.push(nstrut);
+        for (const wx of [-0.42, 0.42]) {
+          const nw = new THREE.Mesh(cylGeo, tyre);
+          nw.scale.set(0.48, 0.34, 0.48);
+          nw.rotation.z = Math.PI / 2;
+          nw.position.set(wx, CY - 3.7, -11);
+          g.add(nw);
+          gearParts.push(nw);
+        }
+        const radome = new THREE.Mesh(
+          new THREE.SphereGeometry(1, 14, 10),
+          new THREE.MeshStandardMaterial({ color: 0x2b2d36, roughness: 0.6 }),
+        );
+        radome.scale.set(2.05, 2.05, 2.2);
+        radome.position.set(0, CY, -17.2);
+        g.add(radome); // nose radome
+        for (const sx of [-1, 1])
+          for (const dz of [-10.5, -6.5, 8.5, 13]) {
+            // passenger doors
+            const dr = new THREE.Mesh(
+              boxGeo,
+              new THREE.MeshStandardMaterial({
+                color: 0xe4e8f0,
+                roughness: 0.45,
+                metalness: 0.3,
+              }),
+            );
+            dr.scale.set(0.1, 1.5, 0.9);
+            dr.position.set(sx * 2.2, CY + 0.35, dz);
+            g.add(dr);
+          }
+        for (const sx of [-1, 1])
+          for (const y of [CY - 1.1, CY + 1.5]) {
+            // panel lines
+            const pl = new THREE.Mesh(
+              boxGeo,
+              new THREE.MeshStandardMaterial({
+                color: 0xd2d6de,
+                roughness: 0.6,
+              }),
+            );
+            pl.scale.set(0.06, 0.1, 28);
+            pl.position.set(sx * 2.16, y, 0.5);
+            g.add(pl);
+          }
+        const logo = new THREE.Mesh(
+          boxGeo,
+          new THREE.MeshStandardMaterial({
+            color: 0xffd24a,
+            roughness: 0.5,
+            emissive: 0x6a5010,
+            emissiveIntensity: 0.3,
+          }),
+        );
+        logo.scale.set(0.6, 1.8, 1.8);
+        logo.position.set(0, CY + 5.4, 16.4);
+        g.add(logo); // tail livery mark
+        const navL = new THREE.Mesh(
+          boxGeo,
+          new THREE.MeshBasicMaterial({ color: 0xff3a3a }),
+        );
+        navL.scale.set(0.4, 0.4, 0.4);
+        navL.position.set(-18.9, CY - 0.4, 3.6);
+        g.add(navL);
+        const navR = new THREE.Mesh(
+          boxGeo,
+          new THREE.MeshBasicMaterial({ color: 0x3aff6a }),
+        );
+        navR.scale.set(0.4, 0.4, 0.4);
+        navR.position.set(18.9, CY - 0.4, 3.6);
+        g.add(navR);
+        const beacon = new THREE.Mesh(
+          boxGeo,
+          new THREE.MeshBasicMaterial({ color: 0xff2a2a }),
+        );
+        beacon.scale.set(0.4, 0.4, 0.4);
+        beacon.position.set(0, CY - 2.3, 0);
+        g.add(beacon);
+        const tailLt = new THREE.Mesh(
+          boxGeo,
+          new THREE.MeshBasicMaterial({ color: 0xffffff }),
+        );
+        tailLt.scale.set(0.4, 0.4, 0.4);
+        tailLt.position.set(0, CY + 7, 18);
+        g.add(tailLt);
+        g.gearParts = gearParts;
+        g.beacon = beacon;
         return g;
       }
       function iAddWorld(g, w, h, d, mat, x, y, z) {
@@ -8093,7 +8702,7 @@
         g.add(m);
         return m;
       }
-      function buildAirport(cx, cz) {
+      function buildAirport(cx, cz, apName) {
         exParent = null;
         exAdd(220, 0.08, 150, fmat(0x33343c), cx, 0.04, cz); // apron
         const rwZ = cz + 58,
@@ -8107,7 +8716,7 @@
           50,
           4,
           1,
-          signMat("SKYLINE INTL AIRPORT", "#bfe3ff", 50, 4),
+          signMat(apName || "SKYLINE INTL AIRPORT", "#bfe3ff", 50, 4),
           cx + 72,
           12,
           cz - 75.4,
@@ -8155,8 +8764,16 @@
       function startFlying() {
         if (!plane) return;
         flying = true;
-        planeView = 1;
         plane.visible = true;
+        buildCockpit();
+        if (cockpit) cockpit.visible = true;
+        flyLookYaw = 0;
+        flyLookPitch = 0;
+        crossInbound = false;
+        crossArrived = false;
+        crossFading = false;
+        flyNav = null;
+        taxiing = false;
         planeHeading = plane.rwHeading;
         planePitch = 0;
         planeRoll = 0;
@@ -8177,6 +8794,9 @@
         if (!flying) return;
         flying = false;
         airborne = false;
+        taxiing = false;
+        crossInbound = false;
+        if (cockpit) cockpit.visible = false;
         plane.position.set(plane.homeX, 2, plane.homeZ);
         plane.rotation.set(0, plane.parkHeading, 0);
         player.x = plane.homeX + 3;
@@ -8201,25 +8821,391 @@
             "%" +
             (airborne ? "" : "   \u2014 on runway");
       }
-      function setFlyCam(fX, fZ) {
-        const px = plane.position.x,
-          py = plane.position.y,
-          pz = plane.position.z,
-          cp = Math.cos(planePitch),
-          sp = Math.sin(planePitch);
-        if (planeView === 1) {
-          camera.position.set(px + fX * 3.4, py + 2.4, pz + fZ * 3.4);
-          camera.lookAt(
-            px + fX * cp * 50,
-            py + 2.4 + sp * 50,
-            pz + fZ * cp * 50,
-          );
-          camera.rotateZ(-planeRoll * 0.6);
-        } else {
-          camera.position.set(px - fX * 22, py + 8, pz - fZ * 22);
-          camera.lookAt(px + fX * 12, py + 2, pz + fZ * 12);
-          camera.rotateZ(-planeRoll * 0.3);
+      // ============================================================
+      //  3D COCKPIT — yoke, pedestal, main panel, overhead; live instruments
+      // ============================================================
+      let cockpit = null,
+        cpYoke = null,
+        cpThrottle = [],
+        cpInstr = [],
+        cpInstrT = 0,
+        flyLookYaw = 0,
+        flyLookPitch = 0;
+      function cpCanvas() {
+        const c = document.createElement("canvas");
+        c.width = 256;
+        c.height = 256;
+        const tex = new THREE.CanvasTexture(c);
+        return {
+          c: c,
+          g: c.getContext("2d"),
+          tex: tex,
+          mat: new THREE.MeshBasicMaterial({ map: tex }),
+        };
+      }
+      function buildCockpit() {
+        if (cockpit) return cockpit;
+        const g = new THREE.Group();
+        g.rotation.order = "YXZ";
+        const shell = new THREE.MeshStandardMaterial({
+          color: 0x3a3d44,
+          roughness: 0.85,
+        });
+        const dash = new THREE.MeshStandardMaterial({
+          color: 0x1e2026,
+          roughness: 0.9,
+        });
+        const trim = new THREE.MeshStandardMaterial({
+          color: 0x5a5f68,
+          roughness: 0.6,
+          metalness: 0.3,
+        });
+        const CY = 3,
+          NZ = -10.6; // cockpit sits at the nose
+        const box = (w, h, d, mat, x, y, z, rx) => {
+          const m = new THREE.Mesh(boxGeo, mat);
+          m.scale.set(w, h, d);
+          m.position.set(x, y, z);
+          if (rx) m.rotation.x = rx;
+          g.add(m);
+          return m;
+        };
+        // shell: floor, ceiling, side walls, rear bulkhead
+        box(4.2, 0.15, 6, shell, 0, CY - 1.35, NZ + 1);
+        box(4.2, 0.15, 6, shell, 0, CY + 1.55, NZ + 1);
+        box(0.15, 3, 6, shell, -2.05, CY + 0.1, NZ + 1);
+        box(0.15, 3, 6, shell, 2.05, CY + 0.1, NZ + 1);
+        box(4.2, 3, 0.15, shell, 0, CY + 0.1, NZ + 4);
+        // windshield posts + side window frames (the glass itself is the open gap you see through)
+        box(0.16, 1.5, 0.16, trim, 0, CY + 0.95, NZ - 2.1);
+        for (const sx of [-1, 1]) {
+          box(0.16, 1.6, 0.16, trim, sx * 1.5, CY + 0.9, NZ - 1.95);
+          box(0.14, 0.14, 2.6, trim, sx * 2.0, CY + 1.35, NZ + 0.2);
+          box(0.14, 0.14, 2.6, trim, sx * 2.0, CY + 0.15, NZ + 0.2);
         }
+        // glareshield + main instrument panel
+        box(3.9, 0.5, 0.7, dash, 0, CY + 0.34, NZ - 1.35); // glareshield hood
+        box(3.9, 1.25, 0.28, dash, 0, CY - 0.34, NZ - 1.2); // panel face
+        box(3.9, 0.16, 0.5, trim, 0, CY - 1.0, NZ - 1.1); // panel lip
+        cpInstr = [];
+        const slots = [
+          [-1.28, "pfd"],
+          [-0.43, "nd"],
+          [0.43, "eng"],
+          [1.28, "sys"],
+        ];
+        for (const s of slots) {
+          const inst = cpCanvas();
+          const scr = new THREE.Mesh(boxGeo, inst.mat);
+          scr.scale.set(0.72, 0.72, 0.05);
+          scr.position.set(s[0], CY - 0.3, NZ - 1.36);
+          g.add(scr);
+          box(0.82, 0.82, 0.06, trim, s[0], CY - 0.3, NZ - 1.33);
+          scr.position.z = NZ - 1.37;
+          inst.kind = s[1];
+          cpInstr.push(inst);
+        }
+        // control yoke: column + wheel (animates with your input)
+        const yoke = new THREE.Group();
+        yoke.position.set(-0.72, CY - 0.95, NZ + 0.35);
+        g.add(yoke);
+        const col = new THREE.Mesh(cylGeo, trim);
+        col.scale.set(0.13, 1.25, 0.13);
+        col.position.y = 0.6;
+        yoke.add(col);
+        const hub = new THREE.Mesh(boxGeo, dash);
+        hub.scale.set(0.34, 0.3, 0.22);
+        hub.position.y = 1.24;
+        yoke.add(hub);
+        for (const sx of [-1, 1]) {
+          const arm = new THREE.Mesh(boxGeo, dash);
+          arm.scale.set(0.5, 0.14, 0.16);
+          arm.position.set(sx * 0.38, 1.24, 0);
+          yoke.add(arm);
+          const grip = new THREE.Mesh(
+            cylGeo,
+            new THREE.MeshStandardMaterial({
+              color: 0x17181c,
+              roughness: 0.95,
+            }),
+          );
+          grip.scale.set(0.1, 0.42, 0.1);
+          grip.position.set(sx * 0.62, 1.22, 0);
+          grip.rotation.z = 0.25;
+          yoke.add(grip);
+        }
+        cpYoke = yoke;
+        // centre pedestal + throttle levers
+        box(0.8, 0.7, 2.0, dash, 0, CY - 1.0, NZ + 1.4);
+        cpThrottle = [];
+        for (const sx of [-0.16, 0.16]) {
+          const lev = new THREE.Group();
+          lev.position.set(sx, CY - 0.68, NZ + 0.85);
+          g.add(lev);
+          const st = new THREE.Mesh(boxGeo, trim);
+          st.scale.set(0.1, 0.52, 0.1);
+          st.position.y = 0.26;
+          lev.add(st);
+          const kn = new THREE.Mesh(
+            boxGeo,
+            new THREE.MeshStandardMaterial({ color: 0x22242a, roughness: 0.9 }),
+          );
+          kn.scale.set(0.15, 0.16, 0.2);
+          kn.position.y = 0.55;
+          lev.add(kn);
+          cpThrottle.push(lev);
+        }
+        for (let i = 0; i < 6; i++)
+          box(
+            0.5,
+            0.05,
+            0.16,
+            trim,
+            i % 2 ? 0.22 : -0.22,
+            CY - 0.66,
+            NZ + 1.5 + Math.floor(i / 2) * 0.35,
+          ); // pedestal switches
+        // overhead panel
+        box(2.6, 0.3, 1.8, dash, 0, CY + 1.36, NZ + 0.4);
+        for (let r = 0; r < 3; r++)
+          for (let c = 0; c < 8; c++) {
+            const sw = new THREE.Mesh(
+              boxGeo,
+              new THREE.MeshBasicMaterial({
+                color: [0x2adf6a, 0xff9a2a, 0xdfdfdf][(r + c) % 3],
+              }),
+            );
+            sw.scale.set(0.11, 0.06, 0.11);
+            sw.position.set(-1.0 + c * 0.29, CY + 1.19, NZ - 0.15 + r * 0.42);
+            g.add(sw);
+          }
+        // seats + rudder pedals
+        for (const sx of [-0.72, 0.72]) {
+          box(0.62, 0.12, 0.62, dash, sx, CY - 1.22, NZ + 1.9);
+          box(0.62, 0.9, 0.12, dash, sx, CY - 0.78, NZ + 2.2);
+          for (const pz of [-0.2, 0.2])
+            box(0.3, 0.1, 0.34, trim, sx, CY - 1.2, NZ + 0.1 + pz, 0.5);
+        }
+        cockpit = g;
+        scene.add(g);
+        g.visible = false;
+        return g;
+      }
+      function drawInstr(inst) {
+        const g = inst.g,
+          W = 256;
+        if (inst.kind === "pfd") {
+          // artificial horizon + speed/alt tapes
+          const cx = 128,
+            cy = 128,
+            hz = cy + planePitch * 300;
+          g.save();
+          g.beginPath();
+          g.rect(0, 0, W, W);
+          g.clip();
+          g.translate(cx, cy);
+          g.rotate(-planeRoll);
+          g.translate(-cx, -cy);
+          g.fillStyle = "#2a6fb0";
+          g.fillRect(-140, -140, 540, hz + 140);
+          g.fillStyle = "#7a5230";
+          g.fillRect(-140, hz, 540, 400);
+          g.strokeStyle = "#ffffff";
+          g.lineWidth = 3;
+          g.beginPath();
+          g.moveTo(-140, hz);
+          g.lineTo(400, hz);
+          g.stroke();
+          g.lineWidth = 2;
+          for (let p = -3; p <= 3; p++) {
+            if (!p) continue;
+            const y = hz - p * 36,
+              w = p % 2 ? 18 : 34;
+            g.beginPath();
+            g.moveTo(cx - w, y);
+            g.lineTo(cx + w, y);
+            g.stroke();
+          }
+          g.restore();
+          g.strokeStyle = "#ffd24a";
+          g.lineWidth = 4;
+          g.beginPath();
+          g.moveTo(78, 128);
+          g.lineTo(108, 128);
+          g.moveTo(148, 128);
+          g.lineTo(178, 128);
+          g.stroke();
+          g.fillStyle = "#ffd24a";
+          g.fillRect(124, 124, 8, 8);
+          g.fillStyle = "rgba(10,12,16,0.75)";
+          g.fillRect(4, 88, 44, 80);
+          g.fillRect(208, 88, 44, 80);
+          g.fillStyle = "#e8f4ff";
+          g.font = "bold 20px monospace";
+          g.textAlign = "center";
+          g.fillText(Math.round(planeSpeed * 3.6), 26, 134);
+          g.fillText(
+            Math.round(Math.max(0, plane.position.y - 2) * 6),
+            230,
+            134,
+          );
+          g.font = "11px monospace";
+          g.fillStyle = "#9fd0e8";
+          g.fillText("KM/H", 26, 152);
+          g.fillText("ALT m", 230, 152);
+        } else if (inst.kind === "nd") {
+          // heading rose + destination pointer
+          g.fillStyle = "#0a1018";
+          g.fillRect(0, 0, W, W);
+          g.strokeStyle = "#2adf6a";
+          g.lineWidth = 2;
+          g.beginPath();
+          g.arc(128, 140, 86, 0, 6.2832);
+          g.stroke();
+          const hdg = ((((-planeHeading * 180) / Math.PI) % 360) + 360) % 360;
+          g.save();
+          g.translate(128, 140);
+          g.rotate((-hdg * Math.PI) / 180);
+          for (let a = 0; a < 360; a += 30) {
+            const r = (a * Math.PI) / 180;
+            g.strokeStyle = "#2adf6a";
+            g.beginPath();
+            g.moveTo(Math.sin(r) * 86, -Math.cos(r) * 86);
+            g.lineTo(Math.sin(r) * 74, -Math.cos(r) * 74);
+            g.stroke();
+          }
+          if (flyNav) {
+            g.strokeStyle = "#ff9a2a";
+            g.lineWidth = 4;
+            const b = flyNav.bearing;
+            g.beginPath();
+            g.moveTo(Math.sin(b) * 66, -Math.cos(b) * 66);
+            g.lineTo(Math.sin(b) * 20, -Math.cos(b) * 20);
+            g.stroke();
+          }
+          g.restore();
+          g.fillStyle = "#ffd24a";
+          g.beginPath();
+          g.moveTo(128, 120);
+          g.lineTo(120, 140);
+          g.lineTo(136, 140);
+          g.closePath();
+          g.fill();
+          g.fillStyle = "#e8f4ff";
+          g.font = "bold 20px monospace";
+          g.textAlign = "center";
+          g.fillText(("00" + Math.round(hdg)).slice(-3), 128, 34);
+          g.font = "12px monospace";
+          g.fillStyle = "#9fd0e8";
+          g.fillText(flyNav ? flyNav.label : "FREE FLIGHT", 128, 244);
+          if (flyNav) g.fillText(flyNav.dist + " km", 128, 226);
+        } else if (inst.kind === "eng") {
+          // throttle / N1
+          g.fillStyle = "#0a1018";
+          g.fillRect(0, 0, W, W);
+          g.fillStyle = "#9fd0e8";
+          g.font = "12px monospace";
+          g.textAlign = "center";
+          g.fillText("N1  %", 128, 24);
+          for (let i = 0; i < 2; i++) {
+            const x = 70 + i * 80,
+              h = Math.round(planeThrottle * 150);
+            g.fillStyle = "#1c2430";
+            g.fillRect(x - 20, 60, 40, 160);
+            g.fillStyle = planeThrottle > 0.92 ? "#ff9a2a" : "#2adf6a";
+            g.fillRect(x - 20, 220 - h, 40, h);
+            g.fillStyle = "#e8f4ff";
+            g.font = "bold 16px monospace";
+            g.fillText(Math.round(planeThrottle * 100), x, 244);
+          }
+        } else {
+          // sys: gear / flight state
+          g.fillStyle = "#0a1018";
+          g.fillRect(0, 0, W, W);
+          g.textAlign = "center";
+          g.font = "bold 15px monospace";
+          g.fillStyle = airborne ? "#2adf6a" : "#ff9a2a";
+          g.fillText(airborne ? "AIRBORNE" : "ON GROUND", 128, 44);
+          g.fillStyle = airborne ? "#ff9a2a" : "#2adf6a";
+          g.fillText(airborne ? "GEAR UP" : "GEAR DOWN", 128, 86);
+          g.fillStyle = "#9fd0e8";
+          g.font = "12px monospace";
+          g.fillText(
+            "PITCH " +
+              (planePitch * 57.3).toFixed(0) +
+              String.fromCharCode(176),
+            128,
+            130,
+          );
+          g.fillText(
+            "ROLL  " + (planeRoll * 57.3).toFixed(0) + String.fromCharCode(176),
+            128,
+            152,
+          );
+          g.fillText(
+            "V/S   " +
+              Math.round(Math.sin(planePitch) * planeSpeed * 60) +
+              " m/min",
+            128,
+            174,
+          );
+          g.fillStyle = "#e8f4ff";
+          g.fillText(
+            exCity === "boston" ? "BOSTON LOGAN" : "SKYLINE INTL",
+            128,
+            214,
+          );
+        }
+        inst.tex.needsUpdate = true;
+      }
+      function updateCockpit(dt) {
+        if (!cockpit) return;
+        cockpit.visible = true;
+        cockpit.position.set(
+          plane.position.x,
+          plane.position.y,
+          plane.position.z,
+        );
+        cockpit.rotation.set(planePitch, planeHeading, planeRoll);
+        if (cpYoke) {
+          cpYoke.rotation.x = -planePitch * 0.6;
+          cpYoke.rotation.y = planeRoll * 0.5;
+        }
+        for (const lev of cpThrottle)
+          lev.rotation.x = -0.5 + planeThrottle * 0.9;
+        cpInstrT += dt;
+        if (cpInstrT > 0.07) {
+          cpInstrT = 0;
+          for (const i of cpInstr) drawInstr(i);
+        }
+      }
+      function planeLocalToWorld(lx, ly, lz) {
+        const cr = Math.cos(planeRoll),
+          sr = Math.sin(planeRoll);
+        let x1 = lx * cr - ly * sr,
+          y1 = lx * sr + ly * cr,
+          z1 = lz;
+        const cp = Math.cos(planePitch),
+          sp = Math.sin(planePitch);
+        let y2 = y1 * cp - z1 * sp,
+          z2 = y1 * sp + z1 * cp;
+        const ch = Math.cos(planeHeading),
+          sh = Math.sin(planeHeading);
+        return {
+          x: plane.position.x + x1 * ch + z2 * sh,
+          y: plane.position.y + y2,
+          z: plane.position.z - x1 * sh + z2 * ch,
+        };
+      }
+      function setFlyCam(fX, fZ) {
+        const eye = planeLocalToWorld(-0.72, 2.05, -11.5); // pilot seat, eyes out the windshield
+        camera.position.set(eye.x, eye.y, eye.z);
+        camera.rotation.order = "YXZ";
+        camera.rotation.set(
+          planePitch + flyLookPitch,
+          planeHeading + flyLookYaw,
+          planeRoll,
+        );
       }
       function updateFlying(dt) {
         let pitchIn = 0,
@@ -8240,7 +9226,26 @@
         const fX = -Math.sin(planeHeading),
           fZ = -Math.cos(planeHeading);
         if (!airborne) {
-          // ---- runway takeoff roll ----
+          // ---- on the ground ----
+          if (taxiing) {
+            // rolling out after landing: brake and steer
+            const brake =
+              keys["KeyS"] || keys["ArrowDown"] || keys["Space"] ? 26 : 11;
+            planeSpeed = Math.max(0, planeSpeed - brake * dt);
+            planeHeading += turnIn * 0.6 * dt * Math.min(1, planeSpeed / 24);
+            plane.position.x += fX * planeSpeed * dt;
+            plane.position.z += fZ * planeSpeed * dt;
+            plane.position.y = 2;
+            planePitch = 0;
+            planeRoll = 0;
+            plane.rotation.set(0, planeHeading, 0);
+            player.x = plane.position.x;
+            player.z = plane.position.z;
+            setFlyCam(fX, fZ);
+            updateFlyInfo();
+            updateCockpit(dt);
+            return;
+          }
           planeSpeed = Math.min(PLANE_MAX, planeSpeed + 12 * dt);
           plane.position.x += fX * planeSpeed * dt;
           plane.position.z += fZ * planeSpeed * dt;
@@ -8255,6 +9260,7 @@
           player.z = plane.position.z;
           setFlyCam(fX, fZ);
           updateFlyInfo();
+          updateCockpit(dt);
           return;
         }
         // ---- airborne: steady flight, auto-level, coordinated bank ----
@@ -8268,13 +9274,202 @@
         plane.position.x += fX * hs * dt;
         plane.position.z += fZ * hs * dt;
         plane.position.y += Math.sin(planePitch) * planeSpeed * dt;
-        plane.position.y = clamp(plane.position.y, 4, 340);
-        if (plane.position.y <= 4 && planePitch < 0) planePitch = 0;
+        plane.position.y = clamp(plane.position.y, 2, 340);
         plane.rotation.set(planePitch, planeHeading, planeRoll);
         player.x = plane.position.x;
         player.z = plane.position.z;
+        if (plane.gearParts)
+          for (const gp of plane.gearParts) gp.visible = plane.position.y < 26; // gear retracts
+        followOcean();
+        updateCrossing();
+        if (plane.position.y <= 2.6 && !crossFading) touchDown();
         setFlyCam(fX, fZ);
         updateFlyInfo();
+        updateCockpit(dt);
+      }
+      // ---- ocean/ground follows the plane so the long ocean crossing never runs off the map ----
+      function followOcean() {
+        if (!exGround) return;
+        const d = Math.hypot(plane.position.x, plane.position.z);
+        if (d > 700) {
+          exGround.position.x = plane.position.x;
+          exGround.position.z = plane.position.z;
+          exGround.updateMatrix();
+        } else if (exGround.position.x !== 0 || exGround.position.z !== 0) {
+          exGround.position.x = 0;
+          exGround.position.z = 0;
+          exGround.updateMatrix();
+        }
+      }
+      // ---- flying far enough from the city crosses over to the other city ----
+      function updateCrossing() {
+        const d = Math.hypot(plane.position.x, plane.position.z);
+        const other = exCity === "boston" ? "NEW YORK" : "BOSTON";
+        if (crossInbound) {
+          flyNav = {
+            bearing:
+              Math.atan2(-plane.position.x, -plane.position.z) - planeHeading,
+            dist: Math.round(d / 12),
+            label:
+              "INBOUND " +
+              (exCity === "boston" ? "BOSTON LOGAN" : "SKYLINE INTL"),
+          };
+          if (d < 260 && !crossArrived) {
+            crossArrived = true;
+            showToast(
+              "\u2708 Approaching " +
+                (exCity === "boston" ? "Boston" : "New York") +
+                " \u2014 line up and land",
+              "#bfe3ff",
+            );
+          }
+        } else {
+          flyNav = {
+            bearing:
+              Math.atan2(plane.position.x, plane.position.z) - planeHeading,
+            dist: Math.round(Math.max(0, CROSS_DIST - d) / 12),
+            label: "TO " + other + " \u2014 FLY OUT",
+          };
+          if (d > CROSS_DIST) crossToOtherCity();
+        }
+      }
+      function crossToOtherCity() {
+        const st = {
+          h: planeHeading,
+          p: planePitch,
+          r: planeRoll,
+          s: planeSpeed,
+          t: planeThrottle,
+          y: plane.position.y,
+        };
+        crossFading = true;
+        exCity = exCity === "boston" ? "nyc" : "boston";
+        try {
+          buildExplore();
+        } catch (e) {
+          console.error("cross build failed", e);
+          crossFading = false;
+          return;
+        }
+        const fX = -Math.sin(st.h),
+          fZ = -Math.cos(st.h);
+        plane.position.set(-fX * CROSS_DIST, st.y, -fZ * CROSS_DIST); // appear far out, pointed at the new city
+        planeHeading = st.h;
+        planePitch = st.p;
+        planeRoll = st.r;
+        planeSpeed = st.s;
+        planeThrottle = st.t;
+        plane.rotation.set(planePitch, planeHeading, planeRoll);
+        plane.visible = true;
+        flying = true;
+        airborne = true;
+        crossInbound = true;
+        crossArrived = false;
+        crossFading = false;
+        player.x = plane.position.x;
+        player.z = plane.position.z;
+        flyNav = {
+          bearing:
+            Math.atan2(-plane.position.x, -plane.position.z) - planeHeading,
+          dist: Math.round(CROSS_DIST / 12),
+          label:
+            "INBOUND " +
+            (exCity === "boston" ? "BOSTON LOGAN" : "SKYLINE INTL"),
+        };
+        showToast(
+          "\u2708 Now entering " +
+            (exCity === "boston" ? "Boston" : "New York") +
+            " airspace",
+          "#bfe3ff",
+        );
+        updateExHud();
+      }
+      // ---- realistic touchdown: land it well or crash ----
+      function touchDown() {
+        const vs = Math.sin(planePitch) * planeSpeed; // negative = sinking
+        const bad =
+          Math.abs(planeRoll) > 0.32 ||
+          vs < -14 ||
+          planeSpeed > PLANE_MAX * 0.94 ||
+          planePitch > 0.34;
+        if (bad) {
+          crashPlane();
+          return;
+        }
+        airborne = false;
+        taxiing = true;
+        crossInbound = false;
+        planeThrottle = 0;
+        planePitch = 0;
+        planeRoll = 0;
+        plane.position.set(plane.position.x, 2, plane.position.z);
+        plane.rotation.set(0, planeHeading, 0);
+        if (plane.gearParts)
+          for (const gp of plane.gearParts) gp.visible = true;
+        sfx("land");
+        showToast(
+          "\ud83d\udeec Touchdown in " +
+            (exCity === "boston" ? "Boston" : "New York") +
+            " \u2014 brake to a stop, then E to get out",
+          "#bfe3ff",
+        );
+        updateExHud();
+      }
+      function exitPlaneOnGround() {
+        flying = false;
+        airborne = false;
+        taxiing = false;
+        if (cockpit) cockpit.visible = false;
+        player.x = plane.position.x + 3;
+        player.z = plane.position.z - 7;
+        player.y = 0;
+        player.yaw = planeHeading;
+        exVY = 0;
+        exOnGround = true;
+        showToast(
+          "Welcome to " +
+            (exCity === "boston" ? "Boston" : "New York") +
+            " \u2708",
+          "#bfe3ff",
+        );
+        updateExHud();
+      }
+      function crashPlane() {
+        flying = false;
+        airborne = false;
+        taxiing = false;
+        crossInbound = false;
+        if (cockpit) cockpit.visible = false;
+        const fl = document.getElementById("photoflash");
+        if (fl) {
+          fl.style.background = "#c81a1a";
+          fl.style.opacity = 0.85;
+          setTimeout(() => {
+            fl.style.opacity = 0;
+            fl.style.background = "#fff";
+          }, 420);
+        }
+        sfx("splash");
+        const ax = plane.homeX !== undefined ? plane.homeX : 0,
+          az = plane.homeZ !== undefined ? plane.homeZ : 0;
+        plane.position.set(ax, 2, az);
+        plane.rotation.set(0, plane.parkHeading || 0, 0);
+        if (plane.gearParts)
+          for (const gp of plane.gearParts) gp.visible = true;
+        planeSpeed = 0;
+        planePitch = 0;
+        planeRoll = 0;
+        player.x = ax + 3;
+        player.z = az - 7;
+        player.y = 0;
+        player.yaw = plane.parkHeading || 0;
+        exVY = 0;
+        exOnGround = true;
+        showToast(
+          "\ud83d\udca5 Hard landing \u2014 you crashed. Back at the airport.",
+          "#ff6a6a",
+        );
+        updateExHud();
       }
 
       // ================= LANDMARK INTERIORS (walk-up staircases) =================
@@ -9496,6 +10691,1647 @@
       // ============================================================
       //  EXPLORE BOSTON (Wave 2 - part 1): landmarks + enterable TD Garden
       // ============================================================
+      // ============================================================
+      //  50 REAL BOSTON LANDMARKS (exterior for all; a few enterable)
+      // ============================================================
+      const LMO = { x: 7300, z: 6900 }; // landmark interior origin
+      const lmBrick = new THREE.MeshStandardMaterial({
+        color: 0x8e4030,
+        roughness: 0.9,
+      });
+      const lmBrickD = new THREE.MeshStandardMaterial({
+        color: 0x6a2f24,
+        roughness: 0.92,
+      });
+      const lmWhite = new THREE.MeshStandardMaterial({
+        color: 0xeee8dc,
+        roughness: 0.8,
+      });
+      const lmGranite = new THREE.MeshStandardMaterial({
+        color: 0x9a968c,
+        roughness: 0.9,
+      });
+      const lmStone = new THREE.MeshStandardMaterial({
+        color: 0xc8bda0,
+        roughness: 0.85,
+      });
+      const lmGoldM = new THREE.MeshStandardMaterial({
+        color: 0xffd54a,
+        metalness: 0.9,
+        roughness: 0.25,
+        emissive: 0x6a5010,
+        emissiveIntensity: 0.35,
+      });
+      const lmGlassL = new THREE.MeshStandardMaterial({
+        color: 0x9fd0e8,
+        metalness: 0.6,
+        roughness: 0.15,
+        emissive: 0x2a5a78,
+        emissiveIntensity: 0.25,
+        transparent: true,
+        opacity: 0.86,
+      });
+      const lmWood = new THREE.MeshStandardMaterial({
+        color: 0x5a3a22,
+        roughness: 0.9,
+      });
+      const lmCopper = new THREE.MeshStandardMaterial({
+        color: 0x3fae8e,
+        roughness: 0.6,
+        metalness: 0.4,
+      });
+      const lmConc = new THREE.MeshStandardMaterial({
+        color: 0x9a978c,
+        roughness: 0.95,
+      });
+      const lmGrass = new THREE.MeshStandardMaterial({
+        color: 0x3f7a3a,
+        roughness: 1,
+      });
+      const lmWater = new THREE.MeshStandardMaterial({
+        color: 0x2a78b0,
+        metalness: 0.5,
+        roughness: 0.2,
+        emissive: 0x145078,
+        emissiveIntensity: 0.35,
+      });
+      function lmSign(x, z, name, col, w, y) {
+        const ww = w || 12;
+        exAdd(
+          ww,
+          1.7,
+          0.3,
+          signMat(name, col || "#ffd27a", ww, 1.7),
+          x,
+          y || 5,
+          z,
+        );
+      }
+      function lmSpot(x, z, r, name, note) {
+        exInteractables.push({
+          x: x,
+          z: z,
+          r: r || 5.5,
+          label: "visit " + name,
+          action: () => {
+            addCoins(2);
+            showToast(note || "You visit " + name, "#ffd27a");
+          },
+        });
+      }
+      // --- generic shapes ---
+      function lmChurch(x, z, s) {
+        s = s || 1;
+        exAdd(11 * s, 8 * s, 15 * s, lmWhite, x, 4 * s, z);
+        exColl(x, z, 11 * s, 15 * s);
+        exAdd(6.5 * s, 7 * s, 6.5 * s, lmWhite, x, 11 * s, z - 5 * s);
+        exAdd(4.2 * s, 9 * s, 4.2 * s, lmWhite, x, 18 * s, z - 5 * s);
+        const sp = new THREE.Mesh(coneGeo, lmWhite);
+        sp.scale.set(4.6 * s, 10 * s, 4.6 * s);
+        sp.position.set(x, 27 * s, z - 5 * s);
+        sp.matrixAutoUpdate = false;
+        sp.updateMatrix();
+        exploreWorld.add(sp);
+        for (let i = -1; i <= 1; i++)
+          exAdd(
+            1.7 * s,
+            4.5 * s,
+            0.3,
+            lmGlassL,
+            x + i * 3.3 * s,
+            4.2 * s,
+            z - 7.6 * s,
+          );
+        addBlob(x, z, 13 * s);
+      }
+      function lmStoneChurch(x, z, s) {
+        s = s || 1;
+        exAdd(16 * s, 11 * s, 20 * s, lmStone, x, 5.5 * s, z);
+        exColl(x, z, 16 * s, 20 * s);
+        exAdd(9 * s, 16 * s, 9 * s, lmStone, x, 8 * s, z - 3 * s);
+        const rf = new THREE.Mesh(coneGeo, lmCopper);
+        rf.scale.set(11 * s, 7 * s, 11 * s);
+        rf.position.set(x, 19 * s, z - 3 * s);
+        rf.matrixAutoUpdate = false;
+        rf.updateMatrix();
+        exploreWorld.add(rf);
+        for (const sx of [-1, 1])
+          exAdd(
+            3 * s,
+            13 * s,
+            3 * s,
+            lmStone,
+            x + sx * 7 * s,
+            6.5 * s,
+            z - 9 * s,
+          );
+        exAdd(5 * s, 6 * s, 0.4, lmGlassL, x, 6 * s, z - 10.2 * s);
+        addBlob(x, z, 15 * s);
+      }
+      function lmBrickHall(x, z, w, d, h, cupola) {
+        exAdd(w, h, d, lmBrick, x, h / 2, z);
+        exColl(x, z, w, d);
+        exAdd(w + 1, 0.9, d + 1, lmBrickD, x, h + 0.45, z);
+        for (let i = -2; i <= 2; i++)
+          exAdd(
+            1.6,
+            h * 0.42,
+            0.3,
+            lmGlassL,
+            x + i * (w / 6),
+            h * 0.55,
+            z - d / 2 - 0.2,
+          );
+        if (cupola) {
+          exAdd(w * 0.22, h * 0.5, d * 0.22, lmWhite, x, h + h * 0.28, z);
+          const dm = new THREE.Mesh(
+            new THREE.SphereGeometry(w * 0.12, 14, 10),
+            lmGoldM,
+          );
+          dm.position.set(x, h + h * 0.56, z);
+          dm.matrixAutoUpdate = false;
+          dm.updateMatrix();
+          exploreWorld.add(dm);
+        }
+        addBlob(x, z, Math.max(w, d) * 0.7);
+      }
+      function lmColumns(x, z, w, d, h) {
+        exAdd(w, h, d, lmStone, x, h / 2, z);
+        exColl(x, z, w, d);
+        exAdd(w + 2, 1.2, d + 2, lmStone, x, h + 0.6, z);
+        const n = Math.max(4, Math.round(w / 5));
+        for (let i = 0; i < n; i++) {
+          const px = x - w / 2 + (w / (n - 1)) * i;
+          const c = new THREE.Mesh(cylGeo, lmWhite);
+          c.scale.set(0.9, h * 0.8, 0.9);
+          c.position.set(px, h * 0.4, z - d / 2 - 1.4);
+          c.matrixAutoUpdate = false;
+          c.updateMatrix();
+          exploreWorld.add(c);
+        }
+        exAdd(w, 1.4, 3.4, lmStone, x, h * 0.82, z - d / 2 - 1.4);
+        for (let s = 0; s < 3; s++)
+          exAdd(
+            w * 0.7,
+            0.35,
+            1.2 - s * 0.3,
+            lmStone,
+            x,
+            0.18 + s * 0.35,
+            z - d / 2 - 3.4 + s * 0.5,
+          );
+        addBlob(x, z, Math.max(w, d) * 0.72);
+      }
+      function lmObeliskB(x, z, h) {
+        exAdd(14, 2.4, 14, lmGranite, x, 1.2, z);
+        exColl(x, z, 14, 14);
+        const T = 5;
+        for (let k = 0; k < T; k++) {
+          const s = 1 - k * 0.14;
+          exAdd(
+            5.2 * s,
+            h / T,
+            5.2 * s,
+            lmGranite,
+            x,
+            2.4 + h * ((k + 0.5) / T),
+            z,
+          );
+        }
+        const cap = new THREE.Mesh(coneGeo, lmGranite);
+        cap.scale.set(3.4, 6, 3.4);
+        cap.position.set(x, 2.4 + h + 3, z);
+        cap.matrixAutoUpdate = false;
+        cap.updateMatrix();
+        exploreWorld.add(cap);
+        addBlob(x, z, 12);
+      }
+      function lmShipB(x, z, ry) {
+        const g = new THREE.Group();
+        g.position.set(x, 0, z);
+        if (ry) g.rotation.y = ry;
+        const hull = new THREE.Mesh(boxGeo, lmWood);
+        hull.scale.set(30, 6, 8);
+        hull.position.y = 3.4;
+        g.add(hull);
+        const deck = new THREE.Mesh(
+          boxGeo,
+          new THREE.MeshStandardMaterial({ color: 0x8a6a44, roughness: 0.9 }),
+        );
+        deck.scale.set(29, 0.4, 7.4);
+        deck.position.y = 6.6;
+        g.add(deck);
+        const stripe = new THREE.Mesh(
+          boxGeo,
+          new THREE.MeshStandardMaterial({ color: 0xe8dcc0, roughness: 0.9 }),
+        );
+        stripe.scale.set(30.2, 0.7, 8.2);
+        stripe.position.y = 5.2;
+        g.add(stripe);
+        for (const mx of [-8, 0, 8]) {
+          const mast = new THREE.Mesh(cylGeo, lmWood);
+          mast.scale.set(0.5, 26, 0.5);
+          mast.position.set(mx, 19, 0);
+          g.add(mast);
+          for (const my of [12, 18, 23]) {
+            const yd = new THREE.Mesh(boxGeo, lmWood);
+            yd.scale.set(0.35, 0.35, 12 - (my - 12) * 0.5);
+            yd.position.set(mx, my, 0);
+            g.add(yd);
+            const sail = new THREE.Mesh(
+              boxGeo,
+              new THREE.MeshStandardMaterial({
+                color: 0xefe8d6,
+                roughness: 0.95,
+              }),
+            );
+            sail.scale.set(0.12, 4.2, 10.5 - (my - 12) * 0.5);
+            sail.position.set(mx, my - 2.4, 0);
+            g.add(sail);
+          }
+        }
+        g.matrixAutoUpdate = false;
+        g.updateMatrix();
+        exploreWorld.add(g);
+        exColl(x, z, 26, 10);
+        addBlob(x, z, 16);
+      }
+      function lmClockTower(x, z, h) {
+        exAdd(20, 14, 20, lmGranite, x, 7, z);
+        exColl(x, z, 20, 20);
+        exAdd(12, h, 12, lmGranite, x, 14 + h / 2, z);
+        for (const f of [
+          [0, -1],
+          [0, 1],
+          [-1, 0],
+          [1, 0],
+        ])
+          exAdd(
+            f[0] ? 0.5 : 7,
+            7,
+            f[0] ? 7 : 0.5,
+            lmWhite,
+            x + f[0] * 6.2,
+            14 + h - 6,
+            z + f[1] * 6.2,
+          );
+        const cap = new THREE.Mesh(coneGeo, lmCopper);
+        cap.scale.set(13, 12, 13);
+        cap.position.set(x, 14 + h + 6, z);
+        cap.matrixAutoUpdate = false;
+        cap.updateMatrix();
+        exploreWorld.add(cap);
+        addBlob(x, z, 18);
+      }
+      function lmModernBox(x, z, w, d, h, mat) {
+        exAdd(w, h, d, mat || lmGlassL, x, h / 2, z);
+        exColl(x, z, w, d);
+        exAdd(w + 1.5, 1, d + 1.5, lmConc, x, h + 0.5, z);
+        addBlob(x, z, Math.max(w, d) * 0.7);
+      }
+      function lmBrutalistB(x, z, w, d, h) {
+        for (let t = 0; t < 3; t++) {
+          const f = 0.6 + t * 0.16;
+          exAdd(
+            w * f,
+            (h / 3) * 0.92,
+            d * f,
+            lmConc,
+            x,
+            h * ((t + 0.5) / 3),
+            z,
+          );
+        }
+        exColl(x, z, w * 0.92, d * 0.92);
+        exAdd(w + 4, 0.4, d + 4, lmGranite, x, 0.2, z);
+        addBlob(x, z, Math.max(w, d) * 0.8);
+      }
+      function lmGreen(x, z, w, d, trees, pond) {
+        exAdd(w, 0.14, d, lmGrass, x, 0.07, z);
+        if (pond)
+          exAdd(
+            w * 0.34,
+            0.3,
+            d * 0.3,
+            lmWater,
+            x - w * 0.18,
+            0.16,
+            z + d * 0.16,
+          );
+        for (let i = 0; i < (trees || 14); i++) {
+          const tx = x + rand(-w * 0.46, w * 0.46),
+            tz = z + rand(-d * 0.46, d * 0.46);
+          exTree(tx, tz, rand(0.8, 1.4));
+        }
+        for (let i = 0; i < 3; i++)
+          exAdd(
+            3,
+            0.5,
+            1,
+            lmWood,
+            x + rand(-w * 0.3, w * 0.3),
+            0.55,
+            z + rand(-d * 0.3, d * 0.3),
+          );
+      }
+      function lmBurying(x, z) {
+        exAdd(
+          30,
+          0.16,
+          24,
+          new THREE.MeshStandardMaterial({ color: 0x4a6a3a, roughness: 1 }),
+          x,
+          0.08,
+          z,
+        );
+        for (let i = 0; i < 26; i++) {
+          const sx = x + rand(-13, 13),
+            sz = z + rand(-10, 10);
+          exAdd(
+            0.9,
+            rand(1.1, 1.9),
+            0.22,
+            lmGranite,
+            sx,
+            0.7,
+            sz,
+            rand(-0.3, 0.3),
+          );
+        }
+        for (let i = -1; i <= 1; i++)
+          exAdd(0.3, 1.6, 24, lmGranite, x + i * 15, 0.8, z);
+        for (let i = 0; i < 4; i++)
+          exTree(x + rand(-13, 13), z + rand(-10, 10), rand(0.9, 1.3));
+      }
+      function lmStationB(x, z, w) {
+        w = w || 44;
+        exAdd(w, 18, 26, lmGranite, x, 9, z);
+        exColl(x, z, w, 26);
+        exAdd(w * 0.34, 22, 3, lmGranite, x, 11, z - 14); // headhouse
+        const cl = new THREE.Mesh(cylGeo, lmWhite);
+        cl.rotation.x = Math.PI / 2;
+        cl.scale.set(3.4, 0.6, 3.4);
+        cl.position.set(x, 17, z - 15.6);
+        cl.matrixAutoUpdate = false;
+        cl.updateMatrix();
+        exploreWorld.add(cl);
+        for (let i = -3; i <= 3; i++)
+          exAdd(2.6, 7, 0.4, lmGlassL, x + i * (w / 8), 6, z - 13.2);
+        const sh = new THREE.Mesh(
+          cylGeo,
+          new THREE.MeshStandardMaterial({
+            color: 0x6a7078,
+            metalness: 0.5,
+            roughness: 0.4,
+          }),
+        );
+        sh.rotation.z = Math.PI / 2;
+        sh.scale.set(9, w * 0.8, 26);
+        sh.position.set(x, 18, z + 8);
+        sh.matrixAutoUpdate = false;
+        sh.updateMatrix();
+        exploreWorld.add(sh);
+        addBlob(x, z, w * 0.6);
+      }
+      function lmCampusB(x, z, dome) {
+        exAdd(46, 0.14, 40, lmGrass, x, 0.07, z);
+        for (const b of [
+          [-16, -12, 16, 12, 12],
+          [16, -12, 16, 12, 12],
+          [0, 14, 26, 12, 14],
+        ]) {
+          exAdd(b[2], b[4], b[3], lmBrick, x + b[0], b[4] / 2, z + b[1]);
+          exColl(x + b[0], z + b[1], b[2], b[3]);
+        }
+        if (dome) {
+          const d = new THREE.Mesh(
+            new THREE.SphereGeometry(8, 20, 12),
+            lmWhite,
+          );
+          d.scale.y = 0.75;
+          d.position.set(x, 16, z + 14);
+          d.matrixAutoUpdate = false;
+          d.updateMatrix();
+          exploreWorld.add(d);
+          for (let i = 0; i < 8; i++) {
+            const a = (i / 8) * 6.2832;
+            const c = new THREE.Mesh(cylGeo, lmWhite);
+            c.scale.set(1, 10, 1);
+            c.position.set(x + Math.cos(a) * 7, 5, z + 14 + Math.sin(a) * 7);
+            c.matrixAutoUpdate = false;
+            c.updateMatrix();
+            exploreWorld.add(c);
+          }
+        } else {
+          exAdd(5, 9, 5, lmWhite, x, 17, z + 14);
+          const sp = new THREE.Mesh(coneGeo, lmWhite);
+          sp.scale.set(5, 8, 5);
+          sp.position.set(x, 25, z + 14);
+          sp.matrixAutoUpdate = false;
+          sp.updateMatrix();
+          exploreWorld.add(sp);
+        }
+        for (let i = 0; i < 8; i++)
+          exTree(x + rand(-20, 20), z + rand(-16, 16), rand(0.9, 1.4));
+        addBlob(x, z, 26);
+      }
+      function lmWharfB(x, z, w) {
+        w = w || 34;
+        exAdd(
+          w,
+          1.2,
+          20,
+          new THREE.MeshStandardMaterial({ color: 0x7a6a58, roughness: 0.95 }),
+          x,
+          0.6,
+          z,
+        );
+        for (let i = -4; i <= 4; i++)
+          exAdd(0.8, 3, 0.8, lmWood, x + i * (w / 9), 1.5, z + 11);
+        exAdd(w * 0.5, 12, 14, lmBrick, x, 6, z - 6);
+        exColl(x, z - 6, w * 0.5, 14);
+        for (let i = 0; i < 3; i++) {
+          const bx = x + rand(-w * 0.4, w * 0.4);
+          exAdd(6, 2, 2.4, lmWhite, bx, 1.4, z + 15);
+          exAdd(0.3, 5, 0.3, lmWhite, bx, 4, z + 15);
+        }
+        addBlob(x, z, w * 0.6);
+      }
+      function lmAquaB(x, z) {
+        const cyl = new THREE.Mesh(
+          cylGeo,
+          new THREE.MeshStandardMaterial({
+            color: 0x2a6a8a,
+            metalness: 0.4,
+            roughness: 0.25,
+            transparent: true,
+            opacity: 0.85,
+            emissive: 0x0f3a52,
+            emissiveIntensity: 0.4,
+          }),
+        );
+        cyl.scale.set(20, 22, 20);
+        cyl.position.set(x, 11, z);
+        cyl.matrixAutoUpdate = false;
+        cyl.updateMatrix();
+        exploreWorld.add(cyl);
+        exAdd(28, 6, 22, lmConc, x, 3, z);
+        exColl(x, z, 28, 22);
+        addBlob(x, z, 18);
+      }
+      function lmZooB(x, z) {
+        exAdd(80, 0.14, 70, lmGrass, x, 0.07, z);
+        for (let i = 0; i < 5; i++) {
+          const px = x + rand(-30, 30),
+            pz = z + rand(-26, 26);
+          exAdd(
+            16,
+            0.16,
+            14,
+            new THREE.MeshStandardMaterial({ color: 0x8a7a5a, roughness: 1 }),
+            px,
+            0.1,
+            pz,
+          );
+          for (let k = 0; k < 8; k++)
+            exAdd(0.2, 2.4, 0.2, bExMetal, px - 8 + k * 2, 1.2, pz - 7);
+        }
+        for (let i = 0; i < 12; i++)
+          exTree(x + rand(-36, 32), z + rand(-30, 30), rand(0.9, 1.5));
+        exAdd(14, 5, 1, lmWood, x, 2.5, z - 36);
+        addBlob(x, z, 40);
+      }
+      function lmFortB(x, z) {
+        for (let i = 0; i < 5; i++) {
+          const a = (i / 5) * 6.2832;
+          exAdd(
+            16,
+            7,
+            10,
+            lmGranite,
+            x + Math.cos(a) * 16,
+            3.5,
+            z + Math.sin(a) * 16,
+            -a,
+          );
+        }
+        exAdd(26, 3, 26, lmGrass, x, 1.5, z);
+        exColl(x, z, 34, 34);
+        for (let i = 0; i < 4; i++) {
+          const a = (i / 4) * 6.2832 + 0.4;
+          exAdd(
+            2,
+            2,
+            3,
+            bExMetal,
+            x + Math.cos(a) * 13,
+            8,
+            z + Math.sin(a) * 13,
+            -a,
+          );
+        }
+        addBlob(x, z, 24);
+      }
+      function lmBridgeB(x, z) {
+        exAdd(120, 1.6, 10, lmConc, x, 9, z);
+        exColl(x, z, 120, 10);
+        for (const tx of [-30, 30]) {
+          exAdd(3, 34, 3, lmConc, x + tx, 17, z);
+          for (const s of [-1, 1])
+            exAdd(2, 18, 2, lmConc, x + tx + s * 3, 40, z, 0, s * 0.3);
+          for (let i = -5; i <= 5; i++) {
+            const dz = i * 5;
+            exAdd(
+              0.35,
+              Math.hypot(30, Math.abs(dz)),
+              0.35,
+              bExMetal,
+              x + tx + dz * 0.6,
+              24,
+              z,
+            );
+          }
+        }
+        addBlob(x, z, 40);
+      }
+      function lmPlazaB(x, z, w, d) {
+        exAdd(
+          w,
+          0.16,
+          d,
+          new THREE.MeshStandardMaterial({ color: 0x9a9488, roughness: 1 }),
+          x,
+          0.08,
+          z,
+        );
+        exAdd(w * 0.2, 0.5, d * 0.2, lmWater, x, 0.3, z);
+        for (let i = 0; i < 6; i++)
+          exTree(
+            x + rand(-w * 0.4, w * 0.4),
+            z + rand(-d * 0.4, d * 0.4),
+            rand(0.8, 1.2),
+          );
+        for (let i = 0; i < 4; i++)
+          exAdd(
+            3,
+            0.5,
+            1,
+            lmWood,
+            x + rand(-w * 0.3, w * 0.3),
+            0.55,
+            z + rand(-d * 0.3, d * 0.3),
+          );
+      }
+      function lmStreetB(x, z) {
+        for (let i = -3; i <= 3; i++) {
+          const bx = x + i * 13,
+            h = rand(10, 15);
+          exAdd(11, h, 12, i % 2 ? lmBrick : lmBrickD, bx, h / 2, z);
+          exColl(bx, z, 11, 12);
+          exAdd(11.6, 0.7, 12.6, lmBrickD, bx, h + 0.35, z);
+          exAdd(
+            9,
+            2.2,
+            1.6,
+            new THREE.MeshStandardMaterial({
+              color: [0x2a6a4a, 0x8a2a3a, 0x2a4a8a, 0xd2a02a][(i + 3) % 4],
+              roughness: 0.85,
+            }),
+            bx,
+            3.4,
+            z - 6.6,
+          );
+          exAdd(6, 2.4, 0.3, lmGlassL, bx, 1.6, z - 6.05);
+        }
+        for (let i = 0; i < 5; i++)
+          exTree(x + rand(-40, 40), z - 11, rand(0.8, 1.1));
+      }
+      function lmMarketB(x, z) {
+        exAdd(40, 9, 16, lmStone, x, 4.5, z);
+        exColl(x, z, 40, 16);
+        for (let i = 0; i < 7; i++) {
+          const sx = x - 18 + i * 6;
+          exAdd(
+            5,
+            3,
+            5,
+            new THREE.MeshStandardMaterial({
+              color: [0xd23a3a, 0x2a8a4a, 0x2a5aaa, 0xd2a02a][i % 4],
+              roughness: 0.9,
+            }),
+            sx,
+            3,
+            z - 13,
+          );
+          exAdd(5, 0.3, 5, lmWood, sx, 1.5, z - 13);
+        }
+        for (let i = 0; i < 6; i++)
+          exPeople.push(mkExPerson(x + rand(-18, 18), z - 16 + rand(-3, 3)));
+        addBlob(x, z, 24);
+      }
+      function lmHospitalB(x, z) {
+        exAdd(34, 20, 22, lmStone, x, 10, z);
+        exColl(x, z, 34, 22);
+        exAdd(12, 6, 12, lmWhite, x, 23, z);
+        const d = new THREE.Mesh(
+          new THREE.SphereGeometry(6.5, 18, 12),
+          lmWhite,
+        );
+        d.scale.y = 0.8;
+        d.position.set(x, 27, z);
+        d.matrixAutoUpdate = false;
+        d.updateMatrix();
+        exploreWorld.add(d);
+        for (let i = -3; i <= 3; i++)
+          exAdd(2, 10, 0.3, lmGlassL, x + i * 4.4, 9, z - 11.2);
+        addBlob(x, z, 24);
+      }
+      function lmShellB(x, z) {
+        const sh = new THREE.Mesh(
+          new THREE.SphereGeometry(14, 20, 12, 0, Math.PI),
+          new THREE.MeshStandardMaterial({
+            color: 0xd8d0bc,
+            roughness: 0.85,
+            side: THREE.DoubleSide,
+          }),
+        );
+        sh.rotation.y = Math.PI;
+        sh.position.set(x, 0.5, z);
+        sh.matrixAutoUpdate = false;
+        sh.updateMatrix();
+        exploreWorld.add(sh);
+        exAdd(26, 0.6, 16, lmConc, x, 0.3, z + 6);
+        exColl(x, z, 20, 10);
+        exAdd(30, 0.14, 26, lmGrass, x, 0.07, z + 18);
+        addBlob(x, z, 16);
+      }
+
+      // --- the 50 landmarks: real places, laid out roughly like the real map ---
+      //  north = -z (Charles River at z=-250, Cambridge beyond), east = +x (harbour), west = -x (Fenway/Back Bay)
+      const BOSTON_LM = [
+        // North End
+        {
+          n: "Old North Church",
+          x: 106,
+          z: -149,
+          t: "church",
+          r: 16,
+          enter: "oldnorth",
+        },
+        {
+          n: "Paul Revere House",
+          x: 113,
+          z: -122,
+          t: "oldhouse",
+          r: 12,
+          enter: "revere",
+        },
+        {
+          n: "Copp's Hill Burying Ground",
+          x: 140,
+          z: -152,
+          t: "burying",
+          r: 18,
+        },
+        { n: "Haymarket", x: 74, z: -115, t: "market", r: 22 },
+        { n: "Boston Public Market", x: 29, z: -120, t: "markethall", r: 16 },
+        // Charlestown
+        { n: "Bunker Hill Monument", x: 155, z: -291, t: "obelisk", r: 16 },
+        { n: "USS Constitution", x: 189, z: -304, t: "ship", r: 20 },
+        { n: "Charlestown Navy Yard", x: 223, z: -278, t: "wharf", r: 22 },
+        { n: "Leonard P. Zakim Bridge", x: 96, z: -236, t: "bridge", r: 30 },
+        // Downtown / Government Center
+        {
+          n: "Faneuil Hall",
+          x: 150,
+          z: -114,
+          t: "faneuil",
+          r: 18,
+          enter: "faneuil",
+        },
+        {
+          n: "Quincy Market",
+          x: 115,
+          z: -81,
+          t: "quincy",
+          r: 22,
+          enter: "quincy",
+        },
+        { n: "Boston City Hall", x: 33, z: 51, t: "brutal", r: 22 },
+        {
+          n: "Old State House",
+          x: 98,
+          z: -43,
+          t: "oldstate",
+          r: 12,
+          enter: "oldstatehouse",
+        },
+        {
+          n: "Old South Meeting House",
+          x: 27,
+          z: 88,
+          t: "church",
+          r: 14,
+          s: 0.8,
+        },
+        { n: "King's Chapel", x: -6, z: -53, t: "stonechurch", r: 14, s: 0.8 },
+        { n: "Granary Burying Ground", x: -41, z: -62, t: "burying", r: 16 },
+        { n: "Park Street Church", x: 3, z: 74, t: "church", r: 14, s: 0.9 },
+        { n: "Boston Athenaeum", x: 25, z: -77, t: "classical", r: 14 },
+        { n: "Boston Opera House", x: -29, z: 56, t: "classical", r: 14 },
+        // Waterfront / Seaport
+        { n: "Custom House Tower", x: 155, z: 18, t: "clock", r: 18 },
+        { n: "Long Wharf", x: 210, z: -36, t: "wharf", r: 20 },
+        {
+          n: "New England Aquarium",
+          x: 225,
+          z: 4,
+          t: "aquarium",
+          r: 18,
+          enter: "aquarium",
+        },
+        { n: "Rowes Wharf", x: 199, z: 41, t: "wharf", r: 20 },
+        { n: "Boston Tea Party Ships", x: 186, z: 0, t: "ship", r: 18 },
+        {
+          n: "Boston Children's Museum",
+          x: 235,
+          z: 67,
+          t: "modern",
+          r: 16,
+          enter: "childrens",
+        },
+        {
+          n: "Institute of Contemporary Art",
+          x: 223,
+          z: 108,
+          t: "modern",
+          r: 18,
+          enter: "ica",
+        },
+        {
+          n: "Boston Convention & Exhibition Center",
+          x: 215,
+          z: 151,
+          t: "modern",
+          r: 28,
+        },
+        {
+          n: "Castle Island & Fort Independence",
+          x: 212,
+          z: 198,
+          t: "fort",
+          r: 26,
+        },
+        {
+          n: "John F. Kennedy Presidential Library",
+          x: 172,
+          z: 232,
+          t: "modern",
+          r: 22,
+        },
+        // Downtown south / stations / hospital
+        {
+          n: "South Station",
+          x: 101,
+          z: 1,
+          t: "station",
+          r: 26,
+          enter: "southstation",
+        },
+        { n: "North Station", x: 189, z: -85, t: "station", r: 24 },
+        {
+          n: "Massachusetts General Hospital",
+          x: -16,
+          z: -101,
+          t: "hospital",
+          r: 20,
+        },
+        { n: "Boston Public Garden", x: -6, z: 151, t: "garden", r: 34 },
+        // Back Bay / Fenway / west
+        { n: "Copley Square", x: -62, z: 96, t: "plaza", r: 22 },
+        {
+          n: "Trinity Church",
+          x: -101,
+          z: 117,
+          t: "stonechurch",
+          r: 16,
+          enter: "trinity",
+        },
+        {
+          n: "Boston Public Library",
+          x: -127,
+          z: 145,
+          t: "classical",
+          r: 18,
+          enter: "bpl",
+        },
+        { n: "Newbury Street", x: -80, z: 5, t: "street", r: 30 },
+        { n: "Christian Science Plaza", x: -152, z: 36, t: "plaza", r: 24 },
+        {
+          n: "Symphony Hall",
+          x: -187,
+          z: -2,
+          t: "classical",
+          r: 16,
+          enter: "symphony",
+        },
+        { n: "Northeastern University", x: -187, z: 83, t: "campus", r: 24 },
+        {
+          n: "Museum of Fine Arts",
+          x: -214,
+          z: 36,
+          t: "classical",
+          r: 22,
+          enter: "mfa",
+        },
+        {
+          n: "Isabella Stewart Gardner Museum",
+          x: -224,
+          z: -9,
+          t: "oldhouse",
+          r: 16,
+          enter: "gardner",
+        },
+        { n: "Boston University", x: -230, z: -104, t: "campus", r: 24 },
+        { n: "Arnold Arboretum", x: -130, z: 215, t: "green", r: 34 },
+        { n: "Franklin Park Zoo", x: -40, z: 241, t: "zoo", r: 34 },
+        // Esplanade / Charles River
+        { n: "Charles River Esplanade", x: -12, z: -171, t: "green", r: 30 },
+        { n: "Hatch Memorial Shell", x: -72, z: -198, t: "shell", r: 18 },
+        {
+          n: "Museum of Science",
+          x: 8,
+          z: -242,
+          t: "modern",
+          r: 24,
+          enter: "science",
+        },
+        // Cambridge (across the river)
+        {
+          n: "Harvard University",
+          x: -70,
+          z: -330,
+          t: "campus",
+          r: 26,
+          enter: "harvard",
+        },
+        {
+          n: "Massachusetts Institute of Technology",
+          x: -160,
+          z: -312,
+          t: "campus",
+          r: 26,
+          dome: true,
+        },
+      ];
+      function buildBostonLandmarks() {
+        exParent = null;
+        for (const L of BOSTON_LM) {
+          const x = L.x,
+            z = L.z,
+            s = L.s || 1;
+          switch (L.t) {
+            case "church":
+              lmChurch(x, z, s);
+              break;
+            case "stonechurch":
+              lmStoneChurch(x, z, s);
+              break;
+            case "oldhouse":
+              lmBrickHall(x, z, 16, 14, 11, false);
+              break;
+            case "oldstate":
+              lmBrickHall(x, z, 18, 13, 12, true);
+              break;
+            case "faneuil":
+              lmBrickHall(x, z, 26, 16, 14, true);
+              break;
+            case "quincy":
+              lmColumns(x, z, 44, 16, 12);
+              break;
+            case "classical":
+              lmColumns(x, z, 32, 20, 15);
+              break;
+            case "burying":
+              lmBurying(x, z);
+              break;
+            case "market":
+              lmMarketB(x, z);
+              break;
+            case "markethall":
+              lmBrickHall(x, z, 28, 16, 10, false);
+              break;
+            case "obelisk":
+              lmObeliskB(x, z, 50);
+              break;
+            case "ship":
+              lmShipB(x, z, 0.3);
+              break;
+            case "wharf":
+              lmWharfB(x, z, 34);
+              break;
+            case "bridge":
+              lmBridgeB(x, z);
+              break;
+            case "brutal":
+              lmBrutalistB(x, z, 34, 28, 26);
+              break;
+            case "clock":
+              lmClockTower(x, z, 42);
+              break;
+            case "aquarium":
+              lmAquaB(x, z);
+              break;
+            case "modern":
+              lmModernBox(x, z, 30, 22, 20, lmGlassL);
+              break;
+            case "fort":
+              lmFortB(x, z);
+              break;
+            case "station":
+              lmStationB(x, z, 44);
+              break;
+            case "hospital":
+              lmHospitalB(x, z);
+              break;
+            case "garden":
+              lmGreen(x, z, 90, 70, 20, true);
+              break;
+            case "green":
+              lmGreen(x, z, 80, 60, 22, false);
+              break;
+            case "plaza":
+              lmPlazaB(x, z, 46, 38);
+              break;
+            case "street":
+              lmStreetB(x, z);
+              break;
+            case "campus":
+              lmCampusB(x, z, !!L.dome);
+              break;
+            case "zoo":
+              lmZooB(x, z);
+              break;
+            case "shell":
+              lmShellB(x, z);
+              break;
+          }
+          const sw = Math.min(26, Math.max(9, L.n.length * 0.85));
+          lmSign(x, z - (L.r + 2), L.n, "#ffd27a", sw, 5.5);
+          if (L.enter)
+            exInteractables.push({
+              x: x,
+              z: z - (L.r - 1),
+              r: 5,
+              label: "go inside " + L.n,
+              action: () => enterLandmark(L.enter, L.n, x, z - (L.r + 2)),
+            });
+          else lmSpot(x, z - (L.r - 1), 5.5, L.n);
+          if (Math.random() < 0.6)
+            exPeople.push(
+              mkExPerson(x + rand(-L.r, L.r), z - (L.r + rand(2, 7))),
+            );
+        }
+      }
+      function enterLandmark(kind, name, rx, rz) {
+        enterInterior(() => buildLandmarkInterior(kind, name), {
+          mode: "explore",
+          x: rx,
+          z: rz - 3,
+          yaw: Math.PI,
+          exitLabel: "exit to street",
+        });
+      }
+      function buildLandmarkInterior(kind, name) {
+        const BIG = {
+          science: [48, 38],
+          mfa: [52, 40],
+          symphony: [46, 44],
+          southstation: [54, 42],
+          harvard: [44, 36],
+          trinity: [36, 42],
+          oldnorth: [30, 40],
+          gardner: [42, 38],
+          ica: [42, 34],
+          childrens: [40, 34],
+          quincy: [52, 26],
+          revere: [26, 24],
+          oldstatehouse: [28, 24],
+        };
+        const sz = BIG[kind] || [38, 32];
+        const X = LMO.x,
+          Z = LMO.z,
+          W = sz[0],
+          D = sz[1],
+          H =
+            kind === "trinity" || kind === "oldnorth" || kind === "symphony"
+              ? 18
+              : 12;
+        const WALLC = {
+          aquarium: 0x1c2630,
+          bpl: 0xd8cfb4,
+          mfa: 0xe6dcc8,
+          gardner: 0xd8c9a8,
+          ica: 0xf0f0ee,
+          childrens: 0xffe9c8,
+          oldnorth: 0xf2efe4,
+          trinity: 0xb8a888,
+          revere: 0xd8c6a8,
+          oldstatehouse: 0xe0d4bc,
+          symphony: 0xdcc9a0,
+          southstation: 0xd0cabc,
+          harvard: 0xe2d8c4,
+        };
+        const wall = fmat(WALLC[kind] || 0xcfc8bc);
+        const FLOORC = {
+          aquarium: 0x243040,
+          mfa: 0x6a5a48,
+          gardner: 0x7a6a4a,
+          ica: 0xb8b8b4,
+          childrens: 0x4a8ab0,
+          oldnorth: 0x8a6a48,
+          trinity: 0x6a5a4a,
+          revere: 0x6a4a28,
+          oldstatehouse: 0x7a6248,
+          symphony: 0x5a4030,
+          southstation: 0x9a958a,
+          harvard: 0x6a5238,
+        };
+        iFloor(X, Z, W, D, 0, fmat(FLOORC[kind] || 0x8a8070));
+        iAdd(W, 0.3, D, fmat(0x2a2620), X, H, Z);
+        iWall(X - W / 2, Z, 0.3, D, H, wall);
+        iWall(X + W / 2, Z, 0.3, D, H, wall);
+        iWall(X, Z + D / 2, W, 0.3, H, wall);
+        iWall(X, Z - D / 2, W, 0.3, H, wall);
+        iSign(
+          X,
+          Z + D / 2 - 0.45,
+          name.toUpperCase(),
+          "#ffd27a",
+          H - 3.5,
+          Math.min(W - 6, 24),
+        );
+        if (kind === "faneuil") {
+          for (let i = 0; i < 8; i++) {
+            const sx = X - 14 + (i % 4) * 9,
+              sz = Z - 6 + Math.floor(i / 4) * 12;
+            iAdd(
+              6,
+              3,
+              5,
+              fmat([0xd23a3a, 0x2a8a4a, 0x2a5aaa, 0xd2a02a][i % 4]),
+              sx,
+              3,
+              sz,
+            );
+            iAdd(6, 0.3, 5, fmat(0x6a4a2a), sx, 1.5, sz);
+          }
+          for (let i = 0; i < 5; i++)
+            iPerson(X + rand(-14, 14), Z + rand(-12, 12), rand(0, 6.28));
+        } else if (kind === "quincy") {
+          iAdd(W - 6, 0.4, 7, fmat(0x9a9488), X, 0.08, Z); // central colonnade aisle
+          for (const sz of [-1, 1])
+            for (let i = 0; i < 8; i++) {
+              const sx = X - 21 + i * 6;
+              iAdd(
+                5.2,
+                3.2,
+                5,
+                fmat(
+                  [0xd23a3a, 0x2a8a4a, 0x2a5aaa, 0xd2a02a, 0x8a3a8a, 0x2a8a8a][
+                    i % 6
+                  ],
+                ),
+                sx,
+                1.6,
+                Z + sz * 8,
+              );
+              iAdd(5.6, 0.5, 5.6, fmat(0x3a2a1a), sx, 3.4, Z + sz * 8);
+              iAdd(4.4, 0.35, 1.4, fmat(0xe8dcc0), sx, 1.9, Z + sz * 5.6);
+            }
+          for (let i = 0; i < 6; i++) {
+            iAdd(2.4, 0.9, 2.4, fmat(0x6a4a2a), X - 14 + i * 6, 0.45, Z);
+            for (const d of [-1, 1])
+              iAdd(
+                0.9,
+                1.1,
+                0.9,
+                fmat(0x5a3a22),
+                X - 14 + i * 6,
+                0.55,
+                Z + d * 2,
+              );
+          }
+          for (let i = 0; i < 8; i++)
+            iAdd(0.9, H, 0.9, fmat(0xd8cfb4), X - 21 + i * 6, H / 2, Z);
+          for (let i = 0; i < 6; i++)
+            iPerson(X + rand(-22, 22), Z + rand(-9, 9), rand(0, 6.28));
+        } else if (kind === "bpl") {
+          for (let r = 0; r < 3; r++)
+            for (const sx of [-1, 1])
+              iAdd(1.4, 6, 18, fmat(0x4a3020), X + sx * (9 + r * 5), 3, Z); // stacks
+          for (let i = 0; i < 4; i++) {
+            iAdd(9, 0.4, 3, fmat(0x6a4a2a), X, 1.4, Z - 9 + i * 6);
+            for (const sx of [-1, 1])
+              iAdd(
+                1.2,
+                1.4,
+                1.2,
+                fmat(0x5a3a22),
+                X + sx * 3,
+                0.7,
+                Z - 9 + i * 6,
+              );
+          }
+          for (let i = 0; i < 4; i++)
+            iAdd(
+              1.2,
+              0.3,
+              1.2,
+              new THREE.MeshStandardMaterial({
+                color: 0xffe08a,
+                emissive: 0xffd06a,
+                emissiveIntensity: 0.8,
+              }),
+              X,
+              1.7,
+              Z - 9 + i * 6,
+            );
+          for (let i = 0; i < 4; i++)
+            iPerson(X + rand(-12, 12), Z + rand(-12, 12), rand(0, 6.28));
+        } else if (kind === "aquarium") {
+          const tank = new THREE.Mesh(
+            cylGeo,
+            new THREE.MeshStandardMaterial({
+              color: 0x2a7aa8,
+              transparent: true,
+              opacity: 0.55,
+              emissive: 0x1a5a80,
+              emissiveIntensity: 0.7,
+              metalness: 0.3,
+              roughness: 0.15,
+            }),
+          );
+          tank.scale.set(15, 10, 15);
+          tank.position.set(X, 5, Z);
+          interiorWorld.add(tank);
+          for (let i = 0; i < 14; i++) {
+            const a = rand(0, 6.28),
+              rr = rand(3, 7);
+            iAdd(
+              1.2,
+              0.5,
+              0.5,
+              fmat([0xffa030, 0xffd24a, 0xe86a3a, 0x8ad0ff][i % 4]),
+              X + Math.cos(a) * rr,
+              2 + rand(0, 6),
+              Z + Math.sin(a) * rr,
+              a,
+            );
+          }
+          for (let i = 0; i < 4; i++)
+            iPerson(X + rand(-16, 16), Z + rand(-13, 13), rand(0, 6.28));
+        } else if (kind === "science") {
+          for (let i = 0; i < 6; i++) {
+            const sx = X - 16 + (i % 3) * 16,
+              sz = Z - 8 + Math.floor(i / 3) * 16;
+            iAdd(6, 0.6, 6, fmat(0x4a5058), sx, 0.3, sz);
+            iAdd(
+              3,
+              4,
+              3,
+              new THREE.MeshStandardMaterial({
+                color: [
+                  0x8ad0ff, 0xffd24a, 0x9aff9a, 0xff8ad0, 0xffa030, 0x8a8aff,
+                ][i],
+                emissive: [
+                  0x2a6a8a, 0x6a5a10, 0x2a6a2a, 0x6a2a5a, 0x6a3a10, 0x2a2a6a,
+                ][i],
+                emissiveIntensity: 0.6,
+              }),
+              sx,
+              2.6,
+              sz,
+            );
+          }
+          const globe = new THREE.Mesh(
+            new THREE.SphereGeometry(4, 18, 14),
+            new THREE.MeshStandardMaterial({
+              color: 0x3a7ab0,
+              emissive: 0x1a4a70,
+              emissiveIntensity: 0.5,
+            }),
+          );
+          globe.position.set(X, 6, Z + 10);
+          interiorWorld.add(globe);
+          for (let i = 0; i < 4; i++)
+            iPerson(X + rand(-18, 18), Z + rand(-14, 14), rand(0, 6.28));
+        } else if (kind === "mfa") {
+          for (const sx of [-1, 1])
+            for (let i = 0; i < 5; i++) {
+              const px = X + sx * (W / 2 - 0.7),
+                pz = Z - 16 + i * 8;
+              iAdd(
+                0.25,
+                5,
+                5.4,
+                fmat([0x8a3a2a, 0x2a4a7a, 0x2a6a4a, 0x6a4a8a, 0x8a6a2a][i]),
+                px,
+                4,
+                pz,
+              );
+              iAdd(0.35, 5.8, 6.2, fmat(0xc8a850), px + sx * 0.12, 4, pz);
+            }
+          for (let i = 0; i < 3; i++) {
+            iAdd(2, 0.8, 2, fmat(0xd8d2c4), X - 10 + i * 10, 0.4, Z + 4);
+            const st = new THREE.Mesh(cylGeo, fmat(0xe4dccc));
+            st.scale.set(1.1, 2.6, 1.1);
+            st.position.set(X - 10 + i * 10, 2.1, Z + 4);
+            interiorWorld.add(st);
+          }
+          for (let i = 0; i < 4; i++)
+            iPerson(X + rand(-18, 18), Z + rand(-14, 14), rand(0, 6.28));
+        } else if (kind === "gardner") {
+          iAdd(20, 0.2, 20, fmat(0x3f7a3a), X, 0.12, Z); // the famous courtyard garden
+          iAdd(6, 0.6, 6, fmat(0xcfc8b4), X, 0.4, Z);
+          iAdd(4, 1.6, 4, fmat(0x9fd0e8), X, 1.2, Z);
+          for (let i = 0; i < 8; i++) {
+            const a = (i / 8) * 6.2832;
+            iAdd(
+              1.4,
+              0.9,
+              1.4,
+              fmat(0x5a7a3a),
+              X + Math.cos(a) * 7.5,
+              0.5,
+              Z + Math.sin(a) * 7.5,
+            );
+          }
+          for (const sx of [-1, 1])
+            for (let i = 0; i < 4; i++) {
+              const px = X + sx * 12.5,
+                pz = Z - 9 + i * 6;
+              const col = new THREE.Mesh(cylGeo, fmat(0xd8c9a8));
+              col.scale.set(1, 9, 1);
+              col.position.set(px, 4.5, pz);
+              interiorWorld.add(col);
+            }
+          for (let i = 0; i < 3; i++)
+            iPerson(X + rand(-15, 15), Z + rand(-13, 13), rand(0, 6.28));
+        } else if (kind === "childrens") {
+          for (let i = 0; i < 5; i++) {
+            const px = X - 14 + i * 7,
+              h = 2 + (i % 3);
+            iAdd(
+              5,
+              h,
+              5,
+              fmat([0xff6a6a, 0xffd24a, 0x6ad0ff, 0x9ae86a, 0xd08aff][i]),
+              px,
+              h / 2,
+              Z - 6,
+            );
+          }
+          iStair(X + 10, Z + 6, 5, 10, 0, 5, "z", false);
+          iAdd(8, 0.5, 8, fmat(0xffb04a), X + 10, 5, Z + 12);
+          for (let i = 0; i < 10; i++)
+            iAdd(
+              1.2,
+              1.2,
+              1.2,
+              fmat([0xff6a6a, 0xffd24a, 0x6ad0ff, 0x9ae86a][i % 4]),
+              X + rand(-14, 14),
+              0.6,
+              Z + rand(-10, 10),
+            );
+          for (let i = 0; i < 3; i++)
+            iPerson(X + rand(-14, 14), Z + rand(-12, 12), rand(0, 6.28));
+        } else if (kind === "ica") {
+          for (const sx of [-1, 1])
+            for (let i = 0; i < 3; i++)
+              iAdd(
+                0.25,
+                4.5,
+                6,
+                fmat(0xf6f6f4),
+                X + sx * (W / 2 - 0.7),
+                4,
+                Z - 8 + i * 8,
+              );
+          for (const sx of [-1, 1])
+            for (let i = 0; i < 3; i++)
+              iAdd(
+                0.34,
+                3,
+                4,
+                fmat([0x2a2a2a, 0xc83a3a, 0x2a5a9a][i]),
+                X + sx * (W / 2 - 1),
+                4,
+                Z - 8 + i * 8,
+              );
+          iAdd(
+            W - 4,
+            7,
+            0.3,
+            new THREE.MeshStandardMaterial({
+              color: 0x9fd0e8,
+              transparent: true,
+              opacity: 0.5,
+              emissive: 0x3a7a9a,
+              emissiveIntensity: 0.5,
+              metalness: 0.5,
+              roughness: 0.15,
+            }),
+            X,
+            4.5,
+            Z + D / 2 - 0.4,
+          ); // harbour window
+          for (let i = 0; i < 3; i++)
+            iAdd(3, 0.5, 1.4, fmat(0x3a3a3e), X - 8 + i * 8, 0.55, Z + 10);
+          for (let i = 0; i < 3; i++)
+            iPerson(X + rand(-16, 16), Z + rand(-12, 12), rand(0, 6.28));
+        } else if (kind === "oldnorth") {
+          for (let i = 0; i < 9; i++)
+            for (const sx of [-1, 1]) {
+              iAdd(
+                9,
+                0.5,
+                1.4,
+                fmat(0x8a6a44),
+                X + sx * 6.5,
+                0.6,
+                Z - 15 + i * 3.6,
+              );
+              iAdd(
+                9,
+                1.5,
+                0.3,
+                fmat(0x7a5a38),
+                X + sx * 6.5,
+                1.2,
+                Z - 15 + i * 3.6 + 0.7,
+              );
+            }
+          iAdd(9, 1.2, 5, fmat(0x9a7a52), X, 0.6, Z + D / 2 - 5);
+          iAdd(4, 3.4, 0.6, fmat(0x8a6a44), X, 2.2, Z + D / 2 - 3);
+          for (const sx of [-1, 1])
+            for (let i = 0; i < 4; i++)
+              iAdd(
+                0.3,
+                6,
+                3.2,
+                new THREE.MeshStandardMaterial({
+                  color: [0x9a3a4a, 0x3a5a9a, 0x3a8a5a, 0xd0a83a][i],
+                  emissive: [0x4a1a24, 0x1a2a4a, 0x1a4a2a, 0x6a5418][i],
+                  emissiveIntensity: 0.55,
+                  transparent: true,
+                  opacity: 0.85,
+                }),
+                X + sx * (W / 2 - 0.6),
+                8,
+                Z - 12 + i * 8,
+              );
+          for (const sx of [-1, 1])
+            iAdd(
+              0.5,
+              0.5,
+              0.5,
+              new THREE.MeshStandardMaterial({
+                color: 0xffe08a,
+                emissive: 0xffd06a,
+                emissiveIntensity: 0.9,
+              }),
+              X + sx * 2,
+              12,
+              Z - D / 2 + 2,
+            ); // two lanterns
+          for (let i = 0; i < 3; i++)
+            iPerson(X + rand(-7, 7), Z + rand(-12, 10), rand(0, 6.28));
+        } else if (kind === "oldstatehouse") {
+          for (let i = 0; i < 4; i++)
+            iAdd(4, 0.9, 3, fmat(0x6a4a2a), X - 9 + i * 6, 0.45, Z - 6);
+          for (let i = 0; i < 4; i++)
+            iAdd(
+              3.2,
+              2.4,
+              0.25,
+              fmat([0x8a3a2a, 0x2a4a7a, 0x2a6a4a, 0x7a6a2a][i]),
+              X - 9 + i * 6,
+              3.4,
+              Z - D / 2 + 0.5,
+            );
+          iAdd(8, 1.2, 1.2, fmat(0x8a6a44), X, 3.2, Z + D / 2 - 1.4); // Declaration balcony rail
+          iAdd(10, 0.4, 3, fmat(0x9a7a52), X, 2.4, Z + D / 2 - 2.6);
+          for (let i = 0; i < 3; i++)
+            iPerson(X + rand(-10, 10), Z + rand(-8, 8), rand(0, 6.28));
+        } else if (kind === "revere") {
+          iAdd(3, 4.5, 1.4, fmat(0x6a4038), X - 8, 2.2, Z - D / 2 + 1.2);
+          iAdd(2.2, 2.4, 0.9, fmat(0x2a1a14), X - 8, 1.2, Z - D / 2 + 0.8); // hearth
+          iAdd(
+            1,
+            1,
+            1,
+            new THREE.MeshStandardMaterial({
+              color: 0xff8a3a,
+              emissive: 0xff6a1a,
+              emissiveIntensity: 0.9,
+            }),
+            X - 8,
+            0.6,
+            Z - D / 2 + 1.1,
+          );
+          iAdd(5, 0.9, 2.6, fmat(0x6a4a2a), X + 3, 0.45, Z - 2);
+          for (const dx of [-2, 2])
+            for (const dz of [-1.6, 1.6])
+              iAdd(1, 1.1, 1, fmat(0x5a3a22), X + 3 + dx, 0.55, Z - 2 + dz);
+          iAdd(4, 1, 2.4, fmat(0x7a5a3a), X + 6, 0.5, Z + 7);
+          iAdd(2.4, 0.6, 2.4, fmat(0xd8cfc0), X + 6, 1.2, Z + 7);
+          iAdd(0.3, 3, 7, fmat(0x5a4030), X - 3, 1.5, Z + 4);
+          iPerson(X + 2, Z + 3, 2.2);
+        } else if (kind === "trinity") {
+          for (let i = 0; i < 10; i++)
+            for (const sx of [-1, 1]) {
+              iAdd(
+                11,
+                0.5,
+                1.5,
+                fmat(0x6a5038),
+                X + sx * 8,
+                0.6,
+                Z - 17 + i * 3.6,
+              );
+              iAdd(
+                11,
+                1.6,
+                0.3,
+                fmat(0x5a4230),
+                X + sx * 8,
+                1.3,
+                Z - 17 + i * 3.6 + 0.75,
+              );
+            }
+          for (const sx of [-1, 1])
+            for (let i = 0; i < 4; i++)
+              iAdd(
+                0.3,
+                8,
+                4,
+                new THREE.MeshStandardMaterial({
+                  color: [0x9a2a3a, 0x2a4a9a, 0x2a7a4a, 0xc89a2a][i],
+                  emissive: [0x5a1420, 0x14264f, 0x134a26, 0x6a5010][i],
+                  emissiveIntensity: 0.6,
+                  transparent: true,
+                  opacity: 0.86,
+                }),
+                X + sx * (W / 2 - 0.6),
+                10,
+                Z - 13 + i * 9,
+              );
+          iAdd(
+            W - 6,
+            10,
+            0.4,
+            new THREE.MeshStandardMaterial({
+              color: 0x8a3a5a,
+              emissive: 0x5a1a3a,
+              emissiveIntensity: 0.55,
+              transparent: true,
+              opacity: 0.85,
+            }),
+            X,
+            10,
+            Z + D / 2 - 0.5,
+          ); // great rose window
+          iAdd(7, 1.3, 3, fmat(0xb8a888), X, 0.7, Z + D / 2 - 5);
+          iAdd(3, 4, 0.5, fmat(0xc8a850), X, 3, Z + D / 2 - 4);
+          for (let i = 0; i < 3; i++)
+            iPerson(X + rand(-9, 9), Z + rand(-14, 10), rand(0, 6.28));
+        } else if (kind === "symphony") {
+          for (let r = 0; r < 7; r++)
+            for (const sx of [-1, 1])
+              iAdd(
+                16,
+                0.6,
+                2.4,
+                fmat(0x7a2a2a),
+                X + sx * 10,
+                0.4 + r * 0.55,
+                Z + 4 + r * 3,
+              ); // raked seating
+          iAdd(W - 8, 1.6, 12, fmat(0x8a6a44), X, 0.8, Z - 14); // stage
+          for (let i = 0; i < 7; i++)
+            iAdd(1, 1.4, 1, fmat(0x2a2a30), X - 9 + i * 3, 2.3, Z - 14); // players
+          for (let i = 0; i < 7; i++)
+            iAdd(0.5, 0.9, 0.5, fmat(0xc8a850), X - 9 + i * 3, 3.4, Z - 14);
+          for (let i = 0; i < 9; i++)
+            iAdd(
+              1.1,
+              7,
+              1.1,
+              fmat(0xc8b070),
+              X - 11 + i * 2.8,
+              8,
+              Z - D / 2 + 1.2,
+            ); // organ pipes
+          for (const sx of [-1, 1])
+            for (let i = 0; i < 4; i++)
+              iAdd(
+                1.6,
+                3,
+                1.2,
+                fmat(0xd8cfb4),
+                X + sx * (W / 2 - 1.4),
+                11,
+                Z - 8 + i * 7,
+              ); // statue niches
+          for (let i = 0; i < 4; i++)
+            iPerson(X + rand(-14, 14), Z + rand(-2, 14), rand(0, 6.28));
+        } else if (kind === "southstation") {
+          for (let i = 0; i < 5; i++) {
+            iAdd(3, 0.5, 10, fmat(0x4a4a50), X - 20 + i * 10, 0.25, Z + 8); // platforms
+            iAdd(0.5, 0.3, 10, bExMetal, X - 21 + i * 10, 0.5, Z + 8);
+            iAdd(0.5, 0.3, 10, bExMetal, X - 19 + i * 10, 0.5, Z + 8);
+          }
+          const train = new THREE.Mesh(
+            boxGeo,
+            new THREE.MeshStandardMaterial({
+              color: 0x8a2a3a,
+              metalness: 0.4,
+              roughness: 0.4,
+            }),
+          );
+          train.scale.set(3.4, 3.4, 16);
+          train.position.set(X + 10, 2, Z + 8);
+          interiorWorld.add(train);
+          for (let i = 0; i < 4; i++)
+            iAdd(
+              0.12,
+              1,
+              2.4,
+              new THREE.MeshBasicMaterial({ color: 0x9fe0ff }),
+              X + 11.75,
+              2.4,
+              Z + 2 + i * 4,
+            );
+          iAdd(
+            16,
+            4,
+            0.4,
+            new THREE.MeshStandardMaterial({
+              color: 0x0a0a12,
+              emissive: 0x2adf6a,
+              emissiveIntensity: 0.6,
+            }),
+            X,
+            7,
+            Z - D / 2 + 0.6,
+          ); // departure board
+          for (let i = 0; i < 4; i++) {
+            iAdd(6, 0.5, 1.6, fmat(0x6a4a2a), X - 12 + i * 8, 0.55, Z - 9);
+            iAdd(6, 1.4, 0.3, fmat(0x5a3a22), X - 12 + i * 8, 1.2, Z - 9.7);
+          }
+          for (let i = 0; i < 6; i++)
+            iPerson(X + rand(-20, 20), Z + rand(-12, 4), rand(0, 6.28));
+        } else if (kind === "harvard") {
+          for (let r = 0; r < 6; r++)
+            iAdd(
+              W - 10,
+              0.6,
+              2.6,
+              fmat(0x6a4a2a),
+              X,
+              0.4 + r * 0.7,
+              Z + 2 + r * 3.2,
+            ); // tiered lecture seats
+          for (let r = 0; r < 6; r++)
+            for (let c = 0; c < 5; c++)
+              iAdd(
+                1,
+                1.1,
+                0.9,
+                fmat(0x4a3020),
+                X - 8 + c * 4,
+                1.2 + r * 0.7,
+                Z + 1.4 + r * 3.2,
+              );
+          iAdd(W - 12, 0.3, 6, fmat(0x7a5a38), X, 0.15, Z - 10);
+          iAdd(16, 5, 0.35, fmat(0x1a3a2a), X, 3.4, Z - D / 2 + 0.6); // chalkboard
+          iAdd(4, 1.1, 1.6, fmat(0x5a3a22), X, 0.55, Z - 10);
+          for (const sx of [-1, 1])
+            iAdd(1.2, 6, 10, fmat(0x4a3020), X + sx * (W / 2 - 1.4), 3, Z + 2);
+          for (let i = 0; i < 4; i++)
+            iPerson(X + rand(-14, 14), Z + rand(-8, 12), rand(0, 6.28));
+        }
+        interiorPortals.push({
+          x: X,
+          z: Z - D / 2 - 0.6,
+          r: 3,
+          label: "exit to street",
+          action: () => exitInterior(),
+        });
+        return { x: X, z: Z - D / 2 + 3, y: 0, yaw: Math.PI };
+      }
+
       function buildBostonExplore() {
         exParent = null;
         const rmat = new THREE.MeshStandardMaterial({
@@ -9505,9 +12341,9 @@
           emissive: 0x123048,
           emissiveIntensity: 0.35,
         });
-        const river = new THREE.Mesh(new THREE.PlaneGeometry(600, 120), rmat);
+        const river = new THREE.Mesh(new THREE.PlaneGeometry(760, 34), rmat);
         river.rotation.x = -Math.PI / 2;
-        river.position.set(-30, 0.02, -250);
+        river.position.set(0, 0.02, -236);
         river.matrixAutoUpdate = false;
         river.updateMatrix();
         exploreWorld.add(river);
@@ -9518,6 +12354,8 @@
         buildStateHouseExplore(STATE.x, STATE.z);
         buildFenwayExplore(FENWAY.x, FENWAY.z);
         buildTDGardenExplore(TDG.x, TDG.z);
+        buildBostonLandmarks();
+        buildAirport(BOSAIR.x, BOSAIR.z, "BOSTON LOGAN AIRPORT");
         exAdd(
           22,
           3,
@@ -10961,7 +13799,7 @@
           },
         },
       ];
-      const BOSTON_LANDMARKS = [
+      const BOSTON_LM_FIXED = [
         {
           id: "common",
           n: "Boston Common",
@@ -11018,6 +13856,39 @@
           },
         },
       ];
+      const BOSTON_MAP_PICKS = [
+        ["Faneuil Hall", "Faneuil Hall", "#ffd27a"],
+        ["Quincy Market", "Quincy Mkt", "#ffd27a"],
+        ["Old North Church", "Old North", "#ffffff"],
+        ["Bunker Hill Monument", "Bunker Hill", "#d8d8d0"],
+        ["USS Constitution", "USS Constitution", "#e8dcc0"],
+        ["New England Aquarium", "Aquarium", "#8ad0ff"],
+        ["Copley Square", "Copley Sq", "#ffd27a"],
+        ["Boston Public Library", "Public Library", "#e8c890"],
+        ["Trinity Church", "Trinity Ch", "#c8b088"],
+        ["Museum of Fine Arts", "MFA", "#e8c890"],
+        ["Symphony Hall", "Symphony Hall", "#e8c890"],
+        ["Museum of Science", "Mus. of Science", "#9fd0e8"],
+        ["South Station", "South Station", "#cfc8bc"],
+        ["North Station", "North Station", "#cfc8bc"],
+        ["Boston Public Garden", "Public Garden", "#9ee29a"],
+        ["Harvard University", "Harvard", "#c8503a"],
+        ["Massachusetts Institute of Technology", "MIT", "#9a9aff"],
+        ["Castle Island & Fort Independence", "Castle Island", "#d8d0b8"],
+        ["John F. Kennedy Presidential Library", "JFK Library", "#cfe0ee"],
+        ["Boston City Hall", "City Hall", "#b8b4a8"],
+      ];
+      let _bosMap = null;
+      function bostonLandmarkList() {
+        // reads live landmark positions so the map always matches the world
+        if (_bosMap) return _bosMap;
+        _bosMap = BOSTON_LM_FIXED.slice();
+        for (const p of BOSTON_MAP_PICKS) {
+          const L = BOSTON_LM.find((l) => l.n === p[0]);
+          if (L) _bosMap.push({ id: p[0], n: p[1], c: p[2], x: L.x, z: L.z });
+        }
+        return _bosMap;
+      }
       let exCoins = []; // collectible pickups in explore {mesh,x,z,kind,got}
 
       // ---------- economy ----------
@@ -11356,7 +14227,9 @@
           cxp + (x - player.x) * sc,
           cyp + (z - player.z) * sc,
         ];
-        for (const L of exCity === "boston" ? BOSTON_LANDMARKS : LANDMARKS) {
+        for (const L of exCity === "boston"
+          ? bostonLandmarkList()
+          : LANDMARKS) {
           let [mx, my] = toMap(L.x, L.z);
           if (mx < 3 || mx > W - 3 || my < 3 || my > H - 3) {
             const ang = Math.atan2(L.z - player.z, L.x - player.x);
@@ -11540,6 +14413,9 @@
         }
       }
       function exitExplore() {
+        if (cockpit) cockpit.visible = false;
+        flying = false;
+        crossInbound = false;
         if (document.exitPointerLock) document.exitPointerLock();
         if (interiorActive) {
           interiorActive = false;
